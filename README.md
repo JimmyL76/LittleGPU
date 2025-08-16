@@ -1,6 +1,6 @@
 # LittleGPU
 
-A SIMT (Single Instruction, Multiple Thread) GPU implementation in SystemVerilog, featuring multi-core architecture with warp-based execution and a custom C++ assembler toolchain.
+A SIMT (Single Instruction, Multiple Thread) GPU implementation in SystemVerilog, featuring multi-core architecture with warp-based execution and a custom C++ assembler toolchain. Project Time (so far): ~30 Hours.
 
 ## Overview
 
