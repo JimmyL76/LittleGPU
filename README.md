@@ -94,4 +94,4 @@ Next in line...
 - [ ] Greater depth of detail in memory implementation, possibly with L1/L2 cache
 
 ## Acknowledgements
-Once again, much of this project's learning and ISA/architecture is heavily inspired by [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu). 
+Once again, a huge special thanks to [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu) for their helpful explanations.
