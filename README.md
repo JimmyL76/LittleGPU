@@ -13,18 +13,18 @@ This project implements a simplified GPU architecture with the purpose of being 
 - **Multi-Core SIMT Architecture**: Multiple processing cores executing warps in parallel
 - **CUDA-Inspired Threading Model**: Organized execution using blocks and warps
 - **Custom Instruction Set**: GPU-specific operations optimized for parallel computation
-- **Memory Controller**: Multi-channel memory interface with round-robin arbitration
+- **Memory Controller**: Multi-channel memory interface with round-robin-like arbitration
 - **C++ Assembler Toolchain**: Complete development environment for GPU kernels
 - **Warp-Based Execution**: 32-thread warps with shared program counter
 - **Synthesizable Design**: Clean SystemVerilog implementation targeting FPGA platforms
 
 ## Architecture
 
-The overall architecture begins with an input of a high-level task that is easily broken down into many smaller, parallel computations. The goal of the GPU is to efficiently distribute key resources perform similar operations on many pieces of data at once, resulting in very high throughput. Some examples of GPU-friendly tasks include 3D graphics rendering, matrix operations, training neural networks, etc. 
+The overall architecture begins with an input of a task or process that is easily broken down into many smaller, parallel computations. The goal of the GPU is to efficiently distribute key resources to perform similar operations on many pieces of data at once, resulting in very high throughput. Some examples of GPU-friendly tasks include 3D graphics rendering, matrix operations, training neural networks, etc. 
 
-To begin, we start with threads which are the fundamental units of computation. Each thread performs a part of the overall computation. Warps are a group of potentially 32 threads that execute in a SIMD manner, which are organized and grouped into blocks. Blocks are then each assigned to their own compute core to run in, creating a massively parallel compute organization hierarchy.
+To begin, we start with threads which are the fundamental units of computation. Each thread performs their own part of the overall computation with their own input data and output results. Due to the parallel nature of these calculations, we can organize them into groups of threads, called warps, which run the same vector/SIMD instructions at once across each thread. To do these calculations, we need many Arithmetic Logic Units (ALUs) as well as multiple units to access key shared resources and memory, such as Load Store Units (LSUs), fetchers, decoders, and registers. These can then be organized and grouped into their own compute cores or Streaming Multiprocessors (SMs). To group together warps to run on each SM, we add one more layer called a block. Blocks are then each assigned to a compute core/SM to run in, creating a massively parallel compute organization hierarchy.
 
-To aid with this, we also have vector registers that hold multiple data elements for a group of parallel threads. In terms of memory hierarchy, the memory controller will handle requests from multiple cores to access global memory.
+To aid with this, we specifically use vector registers that hold multiple data elements for a group of parallel threads. In terms of memory hierarchy, the memory controller will handle requests from multiple cores to access global memory. This way, we can send our input data and output results through memory channels.
 
 ## Assembly
 
