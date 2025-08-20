@@ -19,38 +19,36 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
-`include "common.sv"
+import common_pkg::*;
 
 module mem_controller #(
-        parameter int DATA_WIDTH,
-        parameter int ADDR_WIDTH,
-        parameter int NUM_USERS,
-        parameter int NUM_CHANNELS,
-        parameter int WRITE_ENABLE,
-        parameter int CACHE_LINE_BYTE_SIZE
+    parameter int DATA_WIDTH,
+    parameter int ADDR_WIDTH,
+    parameter int NUM_USERS,
+    parameter int NUM_CHANNELS,
+    parameter int WRITE_ENABLE,
+    parameter int CACHE_LINE_BYTE_SIZE
     )(
-        input logic clk, reset,
-        
-        // user requests interface used by fetch/LSUs
-        output logic [NUM_USERS-1:0] req_ready, // tells user controller is ready for requests
-        input logic [NUM_USERS-1:0] req_valid,
-        input logic [NUM_USERS-1:0] req_we,
-        input logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_addr,
-        input logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_data,
-        
-        output logic [NUM_USERS-1:0] req_resp_valid, // tells user when mem access is done
-        output logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_resp_data,
-            
-        // mem interface
-        // note this is restricted by # of mem channels, which may be smaller than # of users
-        input logic [NUM_CHANNELS-1:0] mem_ready, // mem tells controller channel is ready for usage
-        output logic [NUM_CHANNELS-1:0] mem_valid,
-        output logic [NUM_CHANNELS-1:0] mem_we,
-        output logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_addr,
-        output logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_data,
-        
-        input logic [NUM_CHANNELS-1:0] mem_resp_valid, // mem tells controller when done
-        input logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_resp_data
+    input logic clk, reset,
+    // user requests interface used by fetch/LSUs
+    output logic [NUM_USERS-1:0] req_ready, // tells user controller is ready for requests
+    input logic [NUM_USERS-1:0] req_valid,
+    input logic [NUM_USERS-1:0] req_we,
+    input logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_addr,
+    input logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_data,
+    
+    output logic [NUM_USERS-1:0] req_resp_valid, // tells user when mem access is done
+    output logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_resp_data,
+    // mem interface
+    // note this is restricted by # of mem channels, which may be smaller than # of users
+    input logic [NUM_CHANNELS-1:0] mem_ready, // mem tells controller channel is ready for usage
+    output logic [NUM_CHANNELS-1:0] mem_valid,
+    output logic [NUM_CHANNELS-1:0] mem_we,
+    output logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_addr,
+    output logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_data,
+    
+    input logic [NUM_CHANNELS-1:0] mem_resp_valid, // mem tells controller when done
+    input logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_resp_data
     );
     
 //    typedef enum logic [2:0] {
@@ -60,8 +58,8 @@ module mem_controller #(
 
     // comb next output signals
     // req_ready is an asynchronous output, but is updated on clock edge (no timing issues)
-    logic [NUM_USERS-1:0] next_req_resp_valid; 
-    logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] next_req_resp_data;
+    // logic [NUM_USERS-1:0] next_req_resp_valid; 
+    // logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] next_req_resp_data;
     logic [NUM_CHANNELS-1:0] next_mem_valid;
     logic [NUM_CHANNELS-1:0] next_mem_we;
     logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] next_mem_addr;
@@ -126,29 +124,33 @@ module mem_controller #(
                 next_pending[1 << c] = 1;
             end else if ((pending[1 << c]) && (mem_resp_valid[1 << c])) begin // if done
                 // mem receiving - route data/responses back to correct users
-                next_req_resp_valid[1 << user_granted] = mem_resp_valid[1 << c]; 
-                next_req_resp_data[user_granted] = mem_resp_data[c];
+                // async assumes valid/data comes synchronously from mem + mem clears mem_resp_valid/data on reset
+                req_resp_valid[1 << user_granted] = mem_resp_valid[1 << c]; 
+                req_resp_data[user_granted] = mem_resp_data[c];
+                next_pending[1 << c] = 0;
             end
         end            
     end
     
     
-    always_ff @(posedge clk) begin
-        if (reset) begin
-//            for (int i = 0; i < NUM_USERS; i++) begin
-//                ur_ready <= 0;
-//                ur_data <= 0;
-//                uw_ready <= 0;
-//            end
-//            for (int i = 0; i < NUM_CHANNELS; i++) begin
-//                mr_valid <= 0;
-//                mr_addr <= 0;
-//                mw_valid <= 0;
-//                mw_addr <= 0;
-//                mw_data <= 0;
-//            end
+    always_ff @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            mem_valid <= 0;
+            mem_we <= 0; 
+            pending <= 0;   
+            for (int c = 0; u < NUM_CHANNELS; c++) begin
+                mem_addr[c] <= 0;
+                mem_data[c] <= 0;
+            end
+        end else begin
+            mem_valid <= next_mem_valid;
+            mem_we <= next_mem_we;
+            pending <= next_pending;        
+            for (int c = 0; u < NUM_CHANNELS; c++) begin
+                mem_addr[c] <= next_mem_addr[c];
+                mem_data[c] <= next_mem_data[c];
+            end
         end
-    
     end
     
 endmodule
