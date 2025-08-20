@@ -43,15 +43,41 @@ package common_pkg;
         data_mem_addr_t base_data_addr;
     } kernel_config_t;
     
+    // warp state enum
+    typedef enum logic [2:0] {
+        WARP_IDLE,
+        WARP_FETCH,
+        WARP_DECODE,
+        WARP_REQUEST,
+        WARP_WAIT,
+        WARP_EXECUTE,
+        WARP_UPDATE,
+        WARP_DONE
+    } warp_state_t;
+    
+    // lsu state enum
+    typedef enum logic [1:0] {
+        LSU_IDLE,
+        LSU_REQUESTING,
+        LSU_DONE
+    } lsu_state_t;
+    
+    // fetch state enum
+    typedef enum logic [1:0] {
+        FETCHER_IDLE,
+        FETCHER_FETCHING,
+        FETCHER_DONE
+    } fetcher_state_t;
+    
                 
  endpackage
  
  // used module since functions can't take parameters
 module utility #(
-            parameter int NUM_CORES = 32
+        parameter int NUM_CORES = 32
         )(
-            input logic [NUM_CORES-1:0] nth_free_core,
-            output logic [$clog2(NUM_CORES)-1:0] onehot_to_binary 
+        input logic [NUM_CORES-1:0] nth_free_core,
+        output logic [$clog2(NUM_CORES)-1:0] onehot_to_binary 
         );
         always_comb begin
             for (int i = 0; i < NUM_CORES; i++) 
