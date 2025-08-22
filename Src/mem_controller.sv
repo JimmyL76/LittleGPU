@@ -27,13 +27,14 @@ module mem_controller #(
     parameter int NUM_USERS,
     parameter int NUM_CHANNELS,
     parameter int WRITE_ENABLE,
-    parameter int CACHE_LINE_BYTE_SIZE
+    // for now CACHE_LINE_BYTE_SIZE = 4 for simple implementation, TBD: larger byte cache lines
+    parameter int CACHE_LINE_BYTE_SIZE = 4 
     )(
     input logic clk, reset,
     // user requests interface used by fetch/LSUs
     output logic [NUM_USERS-1:0] req_ready, // tells user controller is ready for requests
     input logic [NUM_USERS-1:0] req_valid,
-    input logic [NUM_USERS-1:0] req_we,
+    input logic [NUM_USERS-1:0][CACHE_LINE_BYTE_SIZE-1:0] req_we,
     input logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_addr,
     input logic [$clog2(NUM_USERS)-1:0][ADDR_WIDTH-1:0] req_data,
     
@@ -43,7 +44,7 @@ module mem_controller #(
     // note this is restricted by # of mem channels, which may be smaller than # of users
     input logic [NUM_CHANNELS-1:0] mem_ready, // mem tells controller channel is ready for usage
     output logic [NUM_CHANNELS-1:0] mem_valid,
-    output logic [NUM_CHANNELS-1:0] mem_we,
+    output logic [NUM_CHANNELS-1:0][CACHE_LINE_BYTE_SIZE-1:0] mem_we,
     output logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_addr,
     output logic [$clog2(NUM_CHANNELS)-1:0][ADDR_WIDTH-1:0] mem_data,
     
@@ -67,12 +68,12 @@ module mem_controller #(
     
     // address decoding - process begins with which channel each user wants
     logic [$clog2(NUM_USERS)-1:0][$clog2(NUM_CHANNELS)-1:0] user_channel;
-    // lowest bit used is right above the last bit that changes within a (power of 2) cache line, ex: bit 7 for 8 bytes
+    // lowest bit used is right above the last bit that changes within a (power of 2) cache line, ex: bit 7 for 64 bytes
     // # of bits based on NUM_CHANNELS, ex: 3 bits for 8 channels
     genvar u, c;
     generate
         for (u = 0; u < NUM_USERS; u++) 
-            assign user_channel[u] = req_addr[u][$clog2((CACHE_LINE_BYTE_SIZE*8)+1)+:($clog2(NUM_CHANNELS)-1)];
+            assign user_channel[u] = req_addr[u][$clog2((CACHE_LINE_BYTE_SIZE)+1)+:($clog2(NUM_CHANNELS)-1)];
     endgenerate
     
     // request routing - per channel, set bits for which users will want to request from that channel
@@ -110,7 +111,7 @@ module mem_controller #(
                     if (channel_grants[c][1 << u]) begin 
                         next_mem_addr[c] = req_addr[u];
                         next_mem_data[c] = req_data[u];
-                        next_mem_we[1 << c] = mem_we[1 << u];
+                        next_mem_we[1 << c] = req_we[1 << u];
                         next_mem_valid[1 << c] = 1;
                         next_user_granted[c] = u; 
                         next_pending[1 << c] = (mem_ready[1 << c]) ? 1 : 0; // pending only begins once mem is ready
@@ -147,7 +148,7 @@ module mem_controller #(
             mem_we <= next_mem_we;
             pending <= next_pending;        
             for (int c = 0; u < NUM_CHANNELS; c++) begin
-                mem_addr[c] <= next_mem_addr[c];
+                mem_addr[c] <= next_mem_addr[c][ADDR_WIDTH-1:2]; // word (4 bytes) based mem, addr/4
                 mem_data[c] <= next_mem_data[c];
             end
         end

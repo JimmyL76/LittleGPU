@@ -37,7 +37,7 @@ module regs #(
     input logic [1:0] IsBR_J,
     input logic DMemEN,
     // data/addr signals
-    input logic rs1_addr, rs2_addr, rd_addr, 
+    input logic [4:0] RS1Addr, RS2Addr, RDAddr,
     // output reg values, per thread
     output data_t [$clog2(THREADS_PER_WARP)-1:0] rs1, rs2,
     // input load reg values, per thread
@@ -61,9 +61,13 @@ module regs #(
             assign thread_ids[t] = warp_id * THREADS_PER_WARP + t;
     endgenerate
     
-    
-    wire [31:0] DataR_W_mux1 = (DMemEN) ? lsu_out : alu_out;
-    wire [31:0] DataR_W = (IsBR_J == 2) ? next_pc : DataR_W_mux1;
+    data_t [$clog2(THREADS_PER_WARP)-1:0] reg_load;
+    generate
+        for (t = 0; t < THREADS_PER_WARP; t++)
+            assign reg_load[t] = (IsBR_J == 2) ? next_pc[t] : 
+                                (DMemEN) ? lsu_out[t] : 
+                                alu_out[t];
+    endgenerate
     
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
@@ -83,13 +87,13 @@ module regs #(
                     if (warp_state == WARP_REQUEST) begin
                         // if fully scalar, don't need vec regs
                         if (Scalar != 1) begin 
-                            rs1[t] <= registers[t][rs1_addr];  
-                            rs2[t] <= registers[t][rs2_addr]; 
+                            rs1[t] <= registers[t][RS1Addr];  
+                            rs2[t] <= registers[t][RS2Addr]; 
                         end
                     end else if (warp_state == WARP_UPDATE) begin
                         // no update if read-only regs or scalar/vec-to-scalar
-                        if (LdReg && (rd_addr > 3) && (!Scalar)) begin 
-                            registers[t][rd_addr] <= DataR_W;
+                        if (LdReg && (RDAddr > 3) && (!Scalar)) begin 
+                            registers[t][RDAddr] <= reg_load;
                         end
                     end
                 end

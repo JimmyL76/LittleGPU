@@ -80,6 +80,7 @@ module utility #(
         output logic [$clog2(NUM_CORES)-1:0] onehot_to_binary 
         );
         always_comb begin
+            onehot_to_binary = -1; // if none are true
             for (int i = 0; i < NUM_CORES; i++) 
                 if (nth_free_core[i]) onehot_to_binary = i; // this will only be true once
         end

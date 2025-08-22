@@ -27,12 +27,15 @@ module alu(
     input instr_mem_addr_t pc, // pc is always instr not data_mem_addr_t
     // data + control signals
     input data_t rs1, rs2, imm,
+    input logic [1:0] IsBR_J,
     input logic Usign,
     input logic RS1Mux,
+    input logic [1:0] BR,
     input logic [3:0] ALUK,
     input logic RS2Mux,
     
-    output data_t alu_out
+    output data_t alu_out,
+    output pc_jump
     );
     
     wire [31:0] alu_rs1 = (RS1Mux) ? pc : rs1;
@@ -60,9 +63,31 @@ module alu(
         endcase
     end    
     
+    // br logic
+    logic next_pc_jump;
+    always_comb begin
+        if (IsBR_J == 0) next_pc_jump = 0;
+        else if(IsBR_J == 2) next_pc_jump = 1;
+        else begin
+            case(BR) 
+                0: next_pc_jump = ($signed(rs1) == $signed(rs2));
+                1: next_pc_jump = ($signed(rs1) != $signed(rs2));
+                2: begin
+                    if(Usign) next_pc_jump = ((rs1) < (rs2));
+                    else next_pc_jump = ($signed(rs1) < $signed(rs2));
+                end
+                3: begin
+                    if(Usign) next_pc_jump = ((rs1) >= (rs2));
+                    else next_pc_jump = ($signed(rs1) >= $signed(rs2));
+                end
+            endcase
+        end
+    end 
+    
     always_ff @(posedge clk) begin
         if (warp_state == WARP_EXECUTE) begin
             alu_out <= alu_result;
+            pc_jump <= next_pc_jump;
         end
     end
     

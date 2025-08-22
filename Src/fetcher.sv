@@ -21,7 +21,9 @@
 
 import common_pkg::*;
 
-module fetcher(
+module fetcher #(
+    parameter int CACHE_LINE_BYTE_SIZE = 4
+    )(
     input logic clk, reset,
     input warp_state_t warp_state,
     input instr_mem_addr_t pc,

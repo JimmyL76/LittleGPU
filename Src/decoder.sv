@@ -39,7 +39,7 @@ module decoder(
     output logic RS2Mux,
     output logic Finish,
     // data/addr signals
-    output logic [4:0] rs1_addr, rs2_addr, rd_addr, 
+    output logic [4:0] RS1Addr, RS2Addr, RDAddr,
     output data_t IMM
     );
     // assume instr's that are only scalar are used correctly
@@ -64,7 +64,7 @@ module decoder(
     logic [2:0] funct3; assign funct3 = instr[14:12];
     logic [6:0] funct7; assign funct7 = instr[31:25];
     
-    // 0 is vector, 1 is scalar (use bit 6 of opcode), 2 is vector to scaler
+    // 0 is vector, 1 is scalar (use bit 6 of opcode), 2 is vector to scalar
     wire [1:0] next_Scalar = instr[6] ? 1 : 
                             ((opcode == SX_S) || (opcode == SX_I)) ? 2 : 
                             0;
@@ -166,9 +166,9 @@ module decoder(
             Finish <= next_Finish;
             
             IMM <= next_IMM;
-            rs1_addr <= rs1;
-            rs2_addr <= rs2;
-            rd_addr <= rd;
+            RS1Addr <= rs1;
+            RS2Aaddr <= rs2;
+            RDAddr <= rd;
         end
     end
     

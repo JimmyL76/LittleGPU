@@ -36,11 +36,11 @@ module scalar_regs #(
     input logic [1:0] IsBR_J,
     input logic DMemEN,
     // data/addr signals
-    input logic rs1_addr, rs2_addr, rd_addr, 
+    input logic [4:0] RS1Addr, RS2Addr, RDAddr,
     // output reg values, per thread
     output data_t rs1, rs2,
     // input load reg values, per thread
-    input data_t alu_out, lsu_out, next_pc
+    input data_t alu_out, lsu_out, next_pc, v_to_s_value
     );
     
     // designated registers for indexing, i = block id * block size + thread id
@@ -55,6 +55,12 @@ module scalar_regs #(
     wire [31:0] DataR_W_mux1 = (DMemEN) ? lsu_out : alu_out;
     wire [31:0] DataR_W = (IsBR_J == 2) ? next_pc : DataR_W_mux1;
     
+    data_t reg_load;
+    assign reg_load = (IsBR_J == 2) ? next_pc : 
+                        (DMemEN) ? lsu_out : 
+                        (Scalar == 2) ? v_to_s_value : 
+                        alu_out;
+    
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
             for (int r = 0; r < SCALAR_REGS_PER_WARP; r++)
@@ -63,15 +69,15 @@ module scalar_regs #(
         end else if (warp_enable) begin
             // check warp state
             if (warp_state == WARP_REQUEST) begin
-                // if fully vec, don't need scalar regs
-                if (Scalar) begin 
-                    rs1 <= registers[rs1_addr];  
-                    rs2 <= registers[rs2_addr]; 
+                // if vec/vec-to-scalar, don't need scalar regs
+                if (Scalar == 1) begin 
+                    rs1 <= registers[RS1Addr];  
+                    rs2 <= registers[RS2Addr]; 
                 end
             end else if (warp_state == WARP_UPDATE) begin
                 // no update if read-only regs or vec only
-                if (LdReg && (rd_addr > 0) && Scalar) begin
-                    registers[rd_addr] <= DataR_W;
+                if (LdReg && (RDAddr > 0) && Scalar) begin
+                    registers[RDAddr] <= reg_load;
                 end
             end 
         end
