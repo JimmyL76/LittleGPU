@@ -26,7 +26,6 @@ module mem_controller #(
     parameter int ADDR_WIDTH,
     parameter int NUM_USERS,
     parameter int NUM_CHANNELS,
-    parameter int WRITE_ENABLE,
     // for now CACHE_LINE_BYTE_SIZE = 4 for simple implementation, TBD: larger byte cache lines
     parameter int CACHE_LINE_BYTE_SIZE = 4 
     )(

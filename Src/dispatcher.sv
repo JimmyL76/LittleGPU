@@ -28,7 +28,7 @@ module dispatcher #(
     input logic clk, reset, start,
     input kernel_config_t kernel_config,
     // core states
-    input logic [NUM_CORES-1:0] core_done, // NOTE: to skip 1 cycle idle delay, core_done should come 1 cycle before core finishes
+    input logic [NUM_CORES-1:0] core_done,
     output logic [NUM_CORES-1:0] cores_in_use, 
     output data_t [NUM_CORES-1:0] core_block_id, // each core gets its own block id
     // kernel execution
