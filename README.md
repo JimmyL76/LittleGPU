@@ -133,9 +133,11 @@ What makes GPU logic especially complex is handling all the different nuances of
 
 ## Next Steps
 
-Next in line...
+Currently working on...
 - [ ] Simulation and verification
-- [ ] Implementing on a real process and/or hardware system
+
+Next in line...
+- [ ] Implementing on a real process and/or synthesis on a hardware system
 - [ ] More sophisticated warp/thread/block scheduling algorithms (global thread indexing?)
 - [ ] Greater depth of detail in memory implementation (see above Memory Details)
 - [ ] Better handling of branch/jump divergence
