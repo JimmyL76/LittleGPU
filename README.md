@@ -134,6 +134,7 @@ What makes GPU logic especially complex is handling all the different nuances of
 ## Next Steps
 
 Currently working on...
+- [ ] Finish actual memory module and logic
 - [ ] Simulation and verification
 
 Next in line...
