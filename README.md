@@ -9,7 +9,7 @@ This project implements a simplified GPU architecture with the purpose of being 
 ## Features
 
 - **Multi-Core SIMT Architecture**: Multiple processing cores executing warps in parallel
-- **CUDA-Inspired Threading Model**: Organized execution using blocks and warps
+- **Multiprocessor Threading Model**: Organized execution using blocks and warps
 - **Custom Instruction Set**: GPU-specific operations optimized for parallel computation
 - **Memory Controller**: Multi-channel memory interface with round-robin-like arbitration
 - **C++ Assembler Toolchain**: Complete development environment for GPU kernels
@@ -22,7 +22,7 @@ The overall architecture begins with an input of a task or process that is easil
 
 To begin, we start with threads as the fundamental units of computation. Each thread performs its part of the overall computation with its own input data and output results. Due to the parallel nature of these calculations, they can be organized into groups of threads, called warps, which run the same vector/SIMT instructions at once across each thread. 
 
-To do these calculations, the warps need many Arithmetic Logic Units (ALUs) as well as multiple units to access key shared resources and memory, such as Load Store Units (LSUs), fetchers, decoders, and registers. These can then be organized and grouped into their own compute cores or Streaming Multiprocessors (SMs). To group together warps to run on each SM, one more layer called a block is added. Blocks are then assigned to compute cores/SMs to run in, creating a massively parallel compute organization hierarchy.
+To do these calculations, the warps need many Arithmetic Logic Units (ALUs) as well as multiple units to access key shared resources and memory, such as Load Store Units (LSUs), fetchers, decoders, and registers. These can then be organized and grouped into their own compute cores or multiprocessors. To group together warps to run on each core, one more layer called a block is added. Blocks are then assigned to cores to run in, creating a massively parallel compute organization hierarchy.
 
 To aid with this, vector registers are used, which hold multiple data elements for a group of parallel threads. In terms of memory hierarchy, the memory controller will handle requests from multiple cores to access global memory. This way, input data and output results can be sent through memory channels.
 
@@ -38,7 +38,7 @@ For this project, I created an assembly to binary assembler that translates inst
 
 This allows for supporting GPU-specific addressing modes, scalar/vector register notations, and comprehensive error handling.
 
-For the block/warp model, I also chose to use CUDA-style `.blocks <num_blocks>` and `.warps <num_warps>` directives. This seems to better mirror real GPU architectures versus centralized control registers.
+For the block/warp model, CUDA-style `.blocks <num_blocks>` and `.warps <num_warps>` directives were chosen. These seems to better mirror real GPU architectures versus centralized control registers.
 
 ## Core/Block Dispatch Logic 
 GPU dispatcher uses bit-masking for efficient matching of pending blocks to free cores, dispatching up to 4 blocks per cycle:
@@ -75,12 +75,12 @@ The memory controller uses asynchronous ready + synchronous valid signals. This 
 
 ## Core Design
 
-When a core/SM runs a warp, it needs a fetcher, decoder, scalar LSU, scalar ALU, a set of vector registers, and a set of scalar registers. In this simple implementation, there is a set of all of these hardware components for each warp within a core. Thus, within a warp, each thread has the same PC and instructions to run. Inside each core, there are a certain number of shared vector/thread ALUs and LSUs. In LittleGPU, these are only enough to run all the threads within one warp at a time per core.
+When a core runs a warp, it needs a fetcher, decoder, scalar LSU, scalar ALU, a set of vector registers, and a set of scalar registers. In this simple implementation, there is a set of all of these hardware components for each warp within a core. Thus, within a warp, each thread has the same PC and instructions to run. Inside each core, there are a certain number of shared vector/thread ALUs and LSUs. In LittleGPU, these are only enough to run all the threads within one warp at a time per core.
 
 Together, this means that all warps can proceed through fetch and decode within a core at the same time. However, we must arbitrate and decide which singular warp gets access to the shared ALUs/LSUs to progress through the request/wait (load from memory or registers), execute (ALU operations), and update (store into memory or registers) stages. This is done with the FCFS + bit-masking approach by checking which warps are not in the idle/fetch/done stages.
 
 ### Vector SIMT Registers
-To perform similar calculations in a highly parallel manner across many pieces of data, each warp has one vector register file, with each vector register consisting of 32 essentially normal scalar registers. For example, `x4` - `x31` are general purpose vector registers, so loading `x4` from the register file would mean loading 32 data values, each being 32-bit themselves. By setting each of these 32 data values to be different, we can perform the same calculation on different pieces of data in parallel. 
+To perform similar calculations in a highly parallel manner across many pieces of data, each warp has one vector register file, with each vector register consisting of 32 essentially normal scalar registers. For example, `x4` - `x31` are general purpose vector registers, so loading `x4` from the register file would mean loading 32 data values, each being 32-bit themselves. By setting each of these 32 data values to be different, the same calculation can be performed on different pieces of data in parallel. 
 
 Registers `x0` - `x3` are read-only and have special purposes:
 |**Register**|**Function**   |
@@ -91,7 +91,7 @@ Registers `x0` - `x3` are read-only and have special purposes:
 |`x3`        |block size     |
 |`x4`-`x31`  |general purpose|
 
-Notice that if we set thread ids to be values 0 through 31, we can load from 32 different memory addresses. Here is an example program from [smol-gpu](https://github.com/Grubre/smol-gpu) for better visualization:
+Notice that when thread ids are set to be values 0 through 31, we can load from 32 different memory addresses. Here is an example program from [smol-gpu](https://github.com/Grubre/smol-gpu) for better visualization:
 ```python
 .blocks 32
 .warps 12
