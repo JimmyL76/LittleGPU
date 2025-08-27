@@ -38,7 +38,7 @@ For this project, I created an assembly to binary assembler that translates inst
 
 This allows for supporting GPU-specific addressing modes, scalar/vector register notations, and comprehensive error handling.
 
-For the block/warp model, CUDA-style `.blocks <num_blocks>` and `.warps <num_warps>` directives were chosen. These seems to better mirror real GPU architectures versus centralized control registers.
+This particular block/warp model is based on CUDA-style directives `.blocks <num_blocks>` and `.warps <num_warps>`.
 
 ## Core/Block Dispatch Logic 
 GPU dispatcher uses bit-masking for efficient matching of pending blocks to free cores, dispatching up to 4 blocks per cycle:
