@@ -4,17 +4,13 @@ A SIMT (Single Instruction, Multiple Thread) GPU implementation in SystemVerilog
 
 ## Overview
 
-This project implements a simplified GPU architecture with the purpose of being an introduction to how modern GPUs work. It supports parallel execution of a compute kernel across multiple cores using thread blocks and warps. The instructions are based on a more advanced RISC-V RV32I ISA based on [smol-gpu](https://github.com/Grubre/smol-gpu). Much of this project is heavily inspired by [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu), so I'd recommend checking those projects out if you're curious about some more background and general details on GPU architecture.
+This project implements a simplified GPU architecture with the purpose of being an introduction to how modern GPUs work. It supports parallel execution of a compute kernel across multiple cores using thread blocks and warps. The instructions are based on a more advanced RISC-V RV32I ISA based on [smol-gpu](https://github.com/Grubre/smol-gpu). Much of this project is inspired by [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu), so I'd recommend checking those projects out if you're curious about some more background and general details on GPU architecture.
 
 ## Features
 
-- **Multi-Core SIMT Architecture**: Multiple processing cores executing warps in parallel
-- **Multiprocessor Threading Model**: Organized execution using blocks and warps
-- **Custom Instruction Set**: GPU-specific operations optimized for parallel computation
+- **Multiprocessor Threading Model**: Organized execution using blocks and 32-thread warps
 - **Memory Controller**: Multi-channel memory interface with round-robin-like arbitration
-- **C++ Assembler Toolchain**: Complete development environment for GPU kernels
-- **Warp-Based Execution**: 32-thread warps with shared program counter
-- **Synthesizable Design**: Clean SystemVerilog implementation targeting FPGA platforms
+- **C++ Assembler Toolchain**: Translates assembly for GPU kernels
 
 ## Architecture
 
@@ -134,7 +130,7 @@ What makes GPU logic especially complex is handling all the different nuances of
 ## Next Steps
 
 Currently working on...
-- [ ] Finish actual memory module and logic
+- [ ] Finish memory module and logic
 - [ ] Simulation and verification
 
 Next in line...
@@ -144,4 +140,4 @@ Next in line...
 - [ ] Better handling of branch/jump divergence
 
 ## Acknowledgements
-Once again, a huge special thanks to [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu) for their helpful explanations.
+Once again, a huge special thanks to [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu).
