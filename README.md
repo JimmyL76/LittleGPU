@@ -38,8 +38,8 @@ This particular block/warp model is based on CUDA-style directives `.blocks <num
 
 ## Core/Block Dispatch Logic 
 GPU dispatcher uses bit-masking for efficient matching of pending blocks to free cores, dispatching up to 4 blocks per cycle:
-1. Identifies free cores using `core_reset` status
-2. Employs `first_clear = (~core_reset[i]) & (core_reset[i] + 1)` for O(1) free core detection
+1. Identifies free cores using `cores_in_use` status
+2. Employs `first_cleared = ~cores_in_use & (cores_in_use + 1)` for O(1) free core detection
 3. Parameterized utility function to convert one-hot to binary for core indexing
 
 ## Memory Controller Design
