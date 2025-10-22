@@ -64,11 +64,17 @@ module dispatcher #(
     // (~i) & (i + 1) gives the lowest cleared bit ; i = 0101, ~i = 1010, ~i+1 = 1011, i+1 = 0110
     // uses [NUM_CORES-1:0] instead of data_t since # of cores could be not 32
     logic [NUM_CORES-1:0][0:3] nth_free_core;
+    logic [NUM_CORES-1:0][0:3] nth_cores_in_use;
     logic [$clog2(NUM_CORES)-1:0][0:3] core_id_used;
     always_comb begin
         nth_free_core[0] = ~cores_in_use & (cores_in_use + 1);
-        for (int i = 0; i < 4; i++)
-            nth_free_core[i] = nth_free_core[i-1] & (~nth_free_core[i-1] + 1);
+        // for nth cores in use, OR previous result to set nth_free_core[0] bit
+        nth_cores_in_use[1] = (cores_in_use | nth_free_core[0]);
+        for (int i = 1; i < 4; i++)
+            nth_free_core[i] = ~cores_in_use  & (nth_cores_in_use[i] + 1);
+            // for rest, continue using setting nth_free_core[i] bit to ignore already claimed bits
+            if (i != 3)
+                nth_cores_in_use[i+1] = (nth_cores_in_use[i] | nth_free_core[i]);
     end
             
     // convert nth_free_cores to core_id 
