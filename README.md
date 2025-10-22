@@ -14,7 +14,7 @@ This project implements a simplified GPU architecture with the purpose of being 
 
 ## Architecture
 
-The overall architecture begins with an input of a task or process that is easily broken down into many smaller, parallel computations. The goal of the GPU is to efficiently distribute key resources to perform similar operations on many pieces of data at once, resulting in very high throughput. Some examples of GPU-friendly tasks include 3D graphics rendering, matrix operations, training neural networks, etc.
+The overall architecture begins with an input of a task or process that can be broken down into many smaller, parallel computations. The goal of the GPU is to efficiently distribute key resources to perform similar operations on many elements of data at once, resulting in very high throughput. Some examples of GPU-friendly tasks include 3D graphics rendering, matrix operations, training neural networks, etc.
 
 To begin, we start with threads as the fundamental units of computation. Each thread performs its part of the overall computation with its own input data and output results. Due to the parallel nature of these calculations, they can be organized into groups of threads, called warps, which run the same vector/SIMT instructions at once across each thread. 
 
@@ -39,8 +39,9 @@ This particular block/warp model is based on CUDA-style directives `.blocks <num
 ## Core/Block Dispatch Logic 
 GPU dispatcher uses bit-masking for efficient matching of pending blocks to free cores, dispatching up to 4 blocks per cycle:
 1. Identifies free cores using `cores_in_use` status
-2. Employs `first_cleared = ~cores_in_use & (cores_in_use + 1)` for O(1) free core detection
-3. Parameterized utility function to convert one-hot to binary for core indexing
+2. Employs `first_cleared = ~cores_in_use & (cores_in_use + 1)` for fast free core detection
+3. Uses previous results for next nth_free_core 
+4. Parameterized utility function to convert one-hot to binary for core indexing
 
 ## Memory Controller Design
 
