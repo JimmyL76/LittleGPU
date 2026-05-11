@@ -22,8 +22,6 @@
 import common_pkg::*;
 
 module decoder(
-    input logic clk, reset,
-    input warp_state_t warp_state,
     input instr_t instr,
     // control signals
     output logic [1:0] Scalar,
@@ -43,133 +41,125 @@ module decoder(
     output data_t IMM
     );
     // assume instr's that are only scalar are used correctly
-    // each opcode even without bit 6 is still unique
-    typedef enum logic [5:0] {
-        R = 6'b110011,
-        I_AR = 6'b010011,
-        I_LD = 6'b000011,
-        S = 6'b100011,
-        B = 6'b100011,
-        J_JAL = 6'b101111,
-        I_JALR = 6'b100111,
-        U_LUI = 6'b110111,
-        U_AUIPC = 6'b010111,
-        SX_S = 6'b111110,
-        SX_I = 6'b111101
+    typedef enum logic [6:0] {
+        // vector instructions (bit 6 = 0)
+        R_V = 7'b0110011,      // 0x33 - vector R-type
+        I_AR_V = 7'b0010011,   // 0x13 - vector I-type arithmetic
+        I_LD = 7'b0000011,     // 0x03 - vector load
+        S_V = 7'b0100011,      // 0x23 - vector store
+        U_LUI_V = 7'b0110111,  // 0x37 - vector LUI
+        U_AUIPC_V = 7'b0010111, // 0x17 - vector AUIPC
+        // scalar instructions (bit 6 = 1)
+        R_S = 7'b1110011,      // 0x73 - scalar R-type
+        I_AR_S = 7'b1010011,   // 0x53 - scalar I-type arithmetic
+        I_LD_S = 7'b1000011,   // 0x43 - scalar load
+        B = 7'b1100011,        // 0x63 - branch (scalar control flow)
+        J_JAL = 7'b1101111,    // 0x6F - jump (scalar control flow)
+        I_JALR = 7'b1100111,   // 0x67 - jump register (scalar control flow)
+        U_LUI_S = 7'b1110111,  // 0x77 - scalar LUI
+        U_AUIPC_S = 7'b1010111, // 0x57 - scalar AUIPC
+        // custom opcodes for special operations
+        SX_S = 7'b1111110,     // 0x7E - vector-to-scalar set less than
+        SX_I = 7'b1111101,     // 0x7D - vector-to-scalar set less than imm
+        S_S = 7'b1111011       // 0x7B - scalar store (avoids 0x63 conflict)
     } opcode_t;
 
-    logic [4:0] rs1, rs2; assign rs1 = instr[19:15], rs2 = instr[24:20];
-    logic [4:0] rd; assign rd = instr[11:7];
-    opcode_t opcode; assign opcode = opcode_t'(instr[5:0]);
+    opcode_t opcode; assign opcode = opcode_t'(instr[6:0]);
     logic [2:0] funct3; assign funct3 = instr[14:12];
     logic [6:0] funct7; assign funct7 = instr[31:25];
     
+    // register addresses directly from instruction
+    assign RS1Addr = instr[19:15];
+    assign RS2Addr = instr[24:20];
+    assign RDAddr = instr[11:7];
+    
+    // all outputs are combinational
     // 0 is vector, 1 is scalar (use bit 6 of opcode), 2 is vector to scalar
-    wire [1:0] next_Scalar = instr[6] ? 1 : 
-                            ((opcode == SX_S) || (opcode == SX_I)) ? 2 : 
+    assign Scalar = ((opcode == SX_S) || (opcode == SX_I)) ? 2 :
+                            instr[6] ? 1 : 
                             0;
     // ld a reg if not store or BR instr
-    wire next_LdReg = (opcode != S) && (opcode != B); 
+    assign LdReg = (opcode != S_V) && (opcode != S_S) && (opcode != B); 
     // only for ld/st, use funct3, 0=word 1=half 2=byte    
-    wire [1:0] next_DataSize = 
+    assign DataSize = 
 //                ((opcode != I_LD) && (opcode != S)) ? 2'bx :
                 ((funct3 == 1) || (funct3 == 5)) ? 1 : // halfword
                 (funct3 == 2) ? 0 : // word
                 2; // byte
-    wire next_DMemR_W = (opcode == S); // only 1 (write) if store
-    wire next_RS1Mux = (opcode == B) || (opcode == J_JAL)
-                || (opcode == U_AUIPC); // 1 if using PC in ALU
+    assign DMemR_W = (opcode == S_V) || (opcode == S_S); // 1 (write) if store
+    assign RS1Mux = (opcode == B) || (opcode == J_JAL)
+                || (opcode == U_AUIPC_V) || (opcode == U_AUIPC_S); // 1 if using PC in ALU
     // 0 = no BR nor J, 1 = BR, 2 = J
-    wire [1:0] next_IsBR_J = (opcode == B) ? 1 :
+    assign IsBR_J = (opcode == B) ? 1 :
                     ((opcode == J_JAL) || (opcode == I_JALR)) ? 2 :
                     0;
     // 0 ==, 1 !=, 2 <, 3 >=
-    wire [1:0] next_BR = (funct3 == 0) ? 0 :
+    assign BR = (funct3 == 0) ? 0 :
                 (funct3 == 1) ? 1 :
                 ((funct3 == 4) || (funct3 == 6)) ? 2 :
                 3;
     // 0 JAL, 1 JALR //    wire Jump = (opcode == I_JALR);
     // BR is don't care if IsBR_J is 0, Jump matters but will always be 0 if is BR;
-    wire next_DMemEN = (opcode == S) || (opcode == I_LD);
+    assign DMemEN = (opcode == S_V) || (opcode == S_S) || (opcode == I_LD) || (opcode == I_LD_S);
         
     // 0 add, 1 sub, 2 xor, 3 or, 4 and, 5 lshf R, 6 rshf R, 7 rshf R arith
     // 8 SLT (and U), 9 LUI, 10 AUIPC
     // U-type done with ImmLogic (lshf_12, add + lshf_12) 
-    logic [3:0] next_ALUK;
     always_comb begin
-        next_ALUK = 0; // default value
-        if((opcode == R) || (opcode == I_AR)) begin
+        ALUK = 0; // default value
+        // covers both vector and scalar variants
+        if((opcode == R_V) || (opcode == R_S) || (opcode == I_AR_V) || (opcode == I_AR_S)) begin
             case(funct3)
-                0: if((opcode == R) && (funct7 == 7'h20)) next_ALUK = 1; // else=default
-                1: next_ALUK = 5; // lshf
-                2, 3: next_ALUK = 8; // SLT
-                4: next_ALUK = 2; // xor
+                0: if(((opcode == R_V) || (opcode == R_S)) && (funct7 == 7'h20)) ALUK = 1; // SUB, else ADD
+                1: ALUK = 5; // SLL
+                2, 3: ALUK = 8; // SLT, SLTU
+                4: ALUK = 2; // XOR
                 5: begin // imm[5:11] is also funct7
-                    if(funct7 == 7'h20) next_ALUK = 7;     
-                    else next_ALUK = 6;    
+                    if(funct7 == 7'h20) ALUK = 7; // SRA      
+                    else ALUK = 6; // SRL    
                 end
-                6: next_ALUK = 3;
-                7: next_ALUK = 4;    
-                default: next_ALUK = 0;           
+                6: ALUK = 3; // OR
+                7: ALUK = 4; // AND    
+                default: ALUK = 0;           
             endcase
+        // vector-to-scalar comparisons
+        end else if((opcode == SX_S) || (opcode == SX_I)) begin
+            ALUK = 8; // always SLT for SX instrs
         // for all other instr, using only add except lui (even AUIPC only adds)
-        end else if(opcode == U_LUI) next_ALUK = 9;
+        end else if((opcode == U_LUI_V) || (opcode == U_LUI_S)) begin
+            ALUK = 9;
+        end
     end
     
-    wire next_RS2Mux = !(opcode == R); // all other instr use imm (1)
-    wire next_Usign = ((opcode == R) || (opcode == I_AR)) ? (funct3 == 3) : // arith
-            (opcode == I_LD) ? ((funct3 == 4) || (funct3 == 5)) : // ld's
+    assign RS2Mux = (opcode != R_V) && (opcode != R_S) && (opcode != SX_S); // R-type and SX_S use RS2 reg
+    assign Usign = ((opcode == R_V) || (opcode == R_S) || (opcode == I_AR_V) || (opcode == I_AR_S)) ? (funct3 == 3) : // arith
+            ((opcode == I_LD) || (opcode == I_LD_S)) ? ((funct3 == 4) || (funct3 == 5)) : // ld's
             ((funct3 == 6) || (funct3 == 7)); // BR
             
     // 0 I-type, 1 S-type, 2 B-type, 3 U-type, 4 J-type
-    wire [2:0] ImmLogic = ((opcode == I_AR) || (opcode == I_LD) || (opcode == I_JALR)) ? 0 :
-                    (opcode == S) ? 1 :
+    wire [2:0] ImmLogic = ((opcode == I_AR_V) || (opcode == I_AR_S) || (opcode == I_LD) || (opcode == I_LD_S) || (opcode == I_JALR) || (opcode == SX_I)) ? 0 :
+                    ((opcode == S_V) || (opcode == S_S)) ? 1 :
                     (opcode == B) ? 2 :
-                    ((opcode == U_LUI) || (opcode == U_AUIPC)) ? 3 :
+                    ((opcode == U_LUI_V) || (opcode == U_LUI_S) || (opcode == U_AUIPC_V) || (opcode == U_AUIPC_S)) ? 3 :
                     4;
     // ImmLogic doesn't matter if opcode type is R
     // if instr is all 0s, treat as HALT
-    wire next_Finish = !instr;
+    assign Finish = !instr;
    
     // Imm Logic block
-    logic [31:0] next_IMM;
     always_comb begin
         case (ImmLogic)
-            0: next_IMM = {{21{instr[31]}}, instr[30:25],
+            0: IMM = {{21{instr[31]}}, instr[30:25],
                 instr[24:20]};
-            1: next_IMM = {{21{instr[31]}}, instr[30:25],
+            1: IMM = {{21{instr[31]}}, instr[30:25],
                 instr[11:8], instr[7]};
-            2: next_IMM = {{20{instr[31]}}, instr[7],
+            2: IMM = {{20{instr[31]}}, instr[7],
                 instr[30:25], instr[11:8], 1'b0};
-            3: next_IMM = {instr[31:12], 12'b0};
-            4: next_IMM = {{12{instr[31]}}, instr[19:12],
+            3: IMM = {instr[31:12], 12'b0};
+            4: IMM = {{12{instr[31]}}, instr[19:12],
                 instr[20], instr[30:21], 1'b0};
-            default: next_IMM = 32'bx; // def case, don't care
+            default: IMM = 32'bx; // def case, don't care
         endcase
     end   
-    
-    always_ff @(posedge clk) begin
-    // values are constantly being updated, no need for reset
-    // but save power if not in WARP_DECODE state
-        if (warp_state == WARP_DECODE) begin
-            Scalar <= next_Scalar;
-            LdReg <= next_LdReg;
-            IsBR_J <= next_IsBR_J;
-            DMemEN <= next_DMemEN;
-            DataSize <= next_DataSize;
-            DMemR_W <= next_DMemR_W;
-            Usign <= next_Usign;
-            RS1Mux <= next_RS1Mux;
-            BR <= next_BR;
-            ALUK <= next_ALUK;
-            RS2Mux <= next_RS2Mux;
-            Finish <= next_Finish;
-            
-            IMM <= next_IMM;
-            RS1Addr <= rs1;
-            RS2Aaddr <= rs2;
-            RDAddr <= rd;
-        end
-    end
     
 endmodule

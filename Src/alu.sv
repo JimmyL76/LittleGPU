@@ -22,8 +22,6 @@
 import common_pkg::*;
 
 module alu(
-    input logic clk, reset,
-    input warp_state_t warp_state,
     input instr_mem_addr_t pc, // pc is always instr not data_mem_addr_t
     // data + control signals
     input data_t rs1, rs2, imm,
@@ -35,60 +33,53 @@ module alu(
     input logic RS2Mux,
     
     output data_t alu_out,
-    output pc_jump
+    output logic pc_jump
     );
     
     wire [31:0] alu_rs1 = (RS1Mux) ? pc : rs1;
     wire [31:0] alu_rs2 = (RS2Mux) ? imm : rs2; 
-    logic [31:0] alu_result;
+    
+    // alu computation (combinational)
     // 0 add, 1 sub, 2 xor, 3 or, 4 and, 5 lshf R, 6 rshf R, 7 rshf R arith
     // 8 SLT (and U), 9 LUI, 10 AUIPC
     // U-type done with ImmLogic (lshf_12, add + lshf_12) 
     always_comb begin
         case(ALUK)
-            0: alu_result = alu_rs1 + alu_rs2;
-            1: alu_result = alu_rs1 - alu_rs2;
-            2: alu_result = alu_rs1 ^ alu_rs2;
-            3: alu_result = alu_rs1 | alu_rs2;
-            4: alu_result = alu_rs1 & alu_rs2;
-            5: alu_result = alu_rs1 << alu_rs2[4:0];
-            6: alu_result = alu_rs1 >> alu_rs2[4:0];
-            7: alu_result = $signed(alu_rs1) >>> alu_rs2[4:0];
+            0: alu_out = alu_rs1 + alu_rs2;
+            1: alu_out = alu_rs1 - alu_rs2;
+            2: alu_out = alu_rs1 ^ alu_rs2;
+            3: alu_out = alu_rs1 | alu_rs2;
+            4: alu_out = alu_rs1 & alu_rs2;
+            5: alu_out = alu_rs1 << alu_rs2[4:0];
+            6: alu_out = alu_rs1 >> alu_rs2[4:0];
+            7: alu_out = $signed(alu_rs1) >>> alu_rs2[4:0];
             8: begin
-                if(Usign) alu_result = (alu_rs1 < alu_rs2) ? 1 : 0;
-                else alu_result = ($signed(alu_rs1) < $signed(alu_rs2)) ? 1 : 0;
+                if(Usign) alu_out = (alu_rs1 < alu_rs2) ? 1 : 0;
+                else alu_out = ($signed(alu_rs1) < $signed(alu_rs2)) ? 1 : 0;
             end
-            9: alu_result = alu_rs2;
-            default: alu_result = 32'bx;
+            9: alu_out = alu_rs2;
+            default: alu_out = 32'bx;
         endcase
     end    
     
-    // br logic
-    logic next_pc_jump;
+    // br logic (combinational)
     always_comb begin
-        if (IsBR_J == 0) next_pc_jump = 0;
-        else if(IsBR_J == 2) next_pc_jump = 1;
+        if (IsBR_J == 0) pc_jump = 0;
+        else if(IsBR_J == 2) pc_jump = 1;
         else begin
             case(BR) 
-                0: next_pc_jump = ($signed(rs1) == $signed(rs2));
-                1: next_pc_jump = ($signed(rs1) != $signed(rs2));
+                0: pc_jump = ($signed(rs1) == $signed(rs2));
+                1: pc_jump = ($signed(rs1) != $signed(rs2));
                 2: begin
-                    if(Usign) next_pc_jump = ((rs1) < (rs2));
-                    else next_pc_jump = ($signed(rs1) < $signed(rs2));
+                    if(Usign) pc_jump = ((rs1) < (rs2));
+                    else pc_jump = ($signed(rs1) < $signed(rs2));
                 end
                 3: begin
-                    if(Usign) next_pc_jump = ((rs1) >= (rs2));
-                    else next_pc_jump = ($signed(rs1) >= $signed(rs2));
+                    if(Usign) pc_jump = ((rs1) >= (rs2));
+                    else pc_jump = ($signed(rs1) >= $signed(rs2));
                 end
             endcase
         end
     end 
-    
-    always_ff @(posedge clk) begin
-        if (warp_state == WARP_EXECUTE) begin
-            alu_out <= alu_result;
-            pc_jump <= next_pc_jump;
-        end
-    end
     
 endmodule

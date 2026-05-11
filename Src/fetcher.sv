@@ -33,44 +33,54 @@ module fetcher #(
     input logic mem_resp_ready,
     input instr_t mem_resp_data,
     // output back to core
-    output fetcher_state_t out_fetcher_state,
+    output logic done,
     output instr_t out_instr
     );
     
     fetcher_state_t s;
+    instr_t out_instr_reg;  // registered instruction
+    
+    // combinational outputs
+    always_comb begin
+        // defaults
+        mem_valid = 0;
+        mem_addr = 0;
+        done = 0;
+        out_instr = out_instr_reg;  // default to reg value
+        
+        if (s == FETCHER_IDLE && warp_state == WARP_FETCH) begin
+            mem_valid = 1;
+            mem_addr = pc;
+        end else if (s == FETCHER_FETCHING) begin
+            mem_valid = 1;
+            mem_addr = pc;  // hold address stable during fetch
+            if (mem_resp_ready) begin
+                done = 1;  // done when memory responds
+                out_instr = mem_resp_data;  // pass through fresh data
+            end
+        end
+    end
     
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
             s <= FETCHER_IDLE;
-            mem_valid <= 0;
-            mem_addr <= 0;
-            out_instr <= 0;
+            out_instr_reg <= 0;
         end else begin
             case (s)
                 FETCHER_IDLE: begin
                     if (warp_state == WARP_FETCH) begin
-                        mem_valid <= 1;
-                        mem_addr <= pc;
                         s <= FETCHER_FETCHING;
                     end
                 end 
                 FETCHER_FETCHING: begin
                     if (mem_resp_ready) begin
-                        mem_valid <= 0;
-                        out_instr <= mem_resp_data;
-                        s <= FETCHER_DONE;
-                    end
-                end 
-                FETCHER_DONE: begin // extra state to wait for warp (like a done signal)
-                    if (warp_state == WARP_DECODE) begin
+                        out_instr_reg <= mem_resp_data;  // reg for stability
                         s <= FETCHER_IDLE;
                     end
-                end
+                end 
                 default: $error("Invalid fetcher state");             
             endcase
         end
     end
-    
-    assign out_fetcher_state = s;
     
 endmodule

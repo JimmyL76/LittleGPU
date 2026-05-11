@@ -35,18 +35,18 @@ module gpu #(
     output logic kernel_done,
     // instr mem
     output logic [NUM_INSTR_CHANNELS-1:0] instr_mem_valid,
-    output instr_mem_addr_t [$clog2(NUM_INSTR_CHANNELS)-1:0] instr_mem_addr,
+    output instr_mem_addr_t instr_mem_addr [NUM_INSTR_CHANNELS],
     input logic [NUM_INSTR_CHANNELS-1:0] instr_mem_ready,
-    input instr_t [$clog2(NUM_INSTR_CHANNELS)-1:0] instr_mem_resp_data,
+    input instr_t instr_mem_resp_data [NUM_INSTR_CHANNELS],
     input logic [NUM_INSTR_CHANNELS-1:0] instr_mem_resp_valid,
     // data mem
     output logic [NUM_DATA_CHANNELS-1:0] data_mem_valid,
-    output data_mem_addr_t [$clog2(NUM_DATA_CHANNELS)-1:0] data_mem_addr,
-    output data_t [$clog2(NUM_DATA_CHANNELS)-1:0] data_mem_data,
-    output logic [$clog2(NUM_DATA_CHANNELS)-1:0][CACHE_LINE_BYTE_SIZE-1:0] data_mem_we,
+    output data_mem_addr_t data_mem_addr [NUM_DATA_CHANNELS],
+    output data_t data_mem_data [NUM_DATA_CHANNELS],
+    output logic [CACHE_LINE_BYTE_SIZE-1:0] data_mem_we [NUM_DATA_CHANNELS],
     input logic [NUM_DATA_CHANNELS-1:0] data_mem_ready,
     input logic [NUM_DATA_CHANNELS-1:0] data_mem_resp_ready,
-    input data_t [$clog2(NUM_DATA_CHANNELS)-1:0] data_mem_resp_data
+    input data_t data_mem_resp_data [NUM_DATA_CHANNELS]
     );
     
     // store kernel_config info
@@ -73,27 +73,27 @@ module gpu #(
         else past_cores_in_use <= cores_in_use;
     end
     assign core_start = ((~past_cores_in_use) & cores_in_use); // for one cycle start to core
-    data_t [$clog2(NUM_CORES)-1:0] core_id, core_block_id;   
+    data_t core_id [NUM_CORES], core_block_id [NUM_CORES];   
              
     // fetcher signals
     // instr mem - one per warp
     localparam int NUM_FETCHERS = NUM_CORES * WARPS_PER_CORE; // one per core (pc same within warp)
     logic [NUM_FETCHERS-1:0] fetcher_mem_ready;
     logic [NUM_FETCHERS-1:0] fetcher_mem_valid;
-    instr_mem_addr_t [$clog2(NUM_FETCHERS)-1:0] fetcher_mem_addr;
-//    instr_t [$clog2(NUM_FETCHERS)-1:0] fetcher_mem_data; // unused
-//    logic [NUM_FETCHERS-1:0][CACHE_LINE_BYTE_SIZE-1:0] fetcher_mem_we; // unused
+    instr_mem_addr_t fetcher_mem_addr [NUM_FETCHERS];
+//    instr_t fetcher_mem_data [NUM_FETCHERS]; // unused
+//    logic [CACHE_LINE_BYTE_SIZE-1:0] fetcher_mem_we [NUM_FETCHERS]; // unused
     logic [NUM_FETCHERS-1:0] fetcher_mem_resp_ready;
-    instr_t [$clog2(NUM_FETCHERS)-1:0] fetcher_mem_resp_data;
+    instr_t fetcher_mem_resp_data [NUM_FETCHERS];
     // lsu signals
     localparam int NUM_LSUS = NUM_CORES * (THREADS_PER_WARP + 1); // one per thread + extra lsu for warp scalar regs
     logic [NUM_LSUS-1:0] lsu_mem_ready;
     logic [NUM_LSUS-1:0] lsu_mem_valid;
-    data_mem_addr_t [$clog2(NUM_LSUS)-1:0] lsu_mem_addr;
-    data_t [$clog2(NUM_LSUS)-1:0] lsu_mem_data;
-    logic [NUM_LSUS-1:0][CACHE_LINE_BYTE_SIZE-1:0] lsu_mem_we;
+    data_mem_addr_t lsu_mem_addr [NUM_LSUS];
+    data_t lsu_mem_data [NUM_LSUS];
+    logic [CACHE_LINE_BYTE_SIZE-1:0] lsu_mem_we [NUM_LSUS];
     logic [NUM_LSUS-1:0] lsu_mem_resp_ready;
-    data_t [$clog2(NUM_LSUS)-1:0] lsu_mem_resp_data;
+    data_t lsu_mem_resp_data [NUM_LSUS];
     
     dispatcher #(
         .NUM_CORES(NUM_CORES)
@@ -180,22 +180,22 @@ module gpu #(
             ) core_inst(
                 .clk(clk), .reset(reset),
                 // core info
-                .core_start(core_start[1 << c]), // one cycle only
-                .core_done(core_done[1 << c]),
+                .core_start(core_start[c]), // one cycle only
+                .core_done(core_done[c]),
                 .kernel_config(kernel_config_reg),
                 .core_id(c), .core_block_id(core_block_id[c]), 
                 // instr mem - one per warp
-                .instr_mem_valid(fetcher_mem_valid[(1 << fetcher_index)+:WARPS_PER_CORE]),
-                .instr_mem_addr(fetcher_mem_addr[(fetcher_index)+:WARPS_PER_CORE]),
-                .instr_mem_resp_ready(fetcher_mem_resp_ready[(1 << fetcher_index)+:WARPS_PER_CORE]),
-                .instr_mem_resp_data(fetcher_mem_resp_data[(fetcher_index)+:WARPS_PER_CORE]),
+                .instr_mem_valid(fetcher_mem_valid[fetcher_index +: WARPS_PER_CORE]),
+                .instr_mem_addr(fetcher_mem_addr[fetcher_index +: WARPS_PER_CORE]),
+                .instr_mem_resp_ready(fetcher_mem_resp_ready[fetcher_index +: WARPS_PER_CORE]),
+                .instr_mem_resp_data(fetcher_mem_resp_data[fetcher_index +: WARPS_PER_CORE]),
                 // data mem - one per thread - extra lsu for warp scalar regs
-                .data_mem_valid(lsu_mem_valid[(1 << lsu_index)+:(THREADS_PER_WARP+1)]),
-                .data_mem_addr(lsu_mem_addr[(lsu_index)+:(THREADS_PER_WARP+1)]),
-                .data_mem_data(lsu_mem_data[(lsu_index)+:(THREADS_PER_WARP+1)]),
-                .data_mem_we(lsu_mem_we[(1 << lsu_index)+:(THREADS_PER_WARP+1)]),
-                .data_mem_resp_ready(lsu_mem_resp_ready[(1 << lsu_index)+:(THREADS_PER_WARP+1)]),
-                .data_mem_resp_data(lsu_mem_resp_data[(lsu_index)+:(THREADS_PER_WARP+1)])
+                .data_mem_valid(lsu_mem_valid[lsu_index +: (THREADS_PER_WARP+1)]),
+                .data_mem_addr(lsu_mem_addr[lsu_index +: (THREADS_PER_WARP+1)]),
+                .data_mem_data(lsu_mem_data[lsu_index +: (THREADS_PER_WARP+1)]),
+                .data_mem_we(lsu_mem_we[lsu_index +: (THREADS_PER_WARP+1)]),
+                .data_mem_resp_ready(lsu_mem_resp_ready[lsu_index +: (THREADS_PER_WARP+1)]),
+                .data_mem_resp_data(lsu_mem_resp_data[lsu_index +: (THREADS_PER_WARP+1)])
             );
         end
     endgenerate

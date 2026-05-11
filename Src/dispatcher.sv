@@ -70,11 +70,12 @@ module dispatcher #(
         nth_free_core[0] = ~cores_in_use & (cores_in_use + 1);
         // for nth cores in use, OR previous result to set nth_free_core[0] bit
         nth_cores_in_use[1] = (cores_in_use | nth_free_core[0]);
-        for (int i = 1; i < 4; i++)
+        for (int i = 1; i < 4; i++) begin
             nth_free_core[i] = ~cores_in_use  & (nth_cores_in_use[i] + 1);
             // for rest, continue using setting nth_free_core[i] bit to ignore already claimed bits
             if (i != 3)
                 nth_cores_in_use[i+1] = (nth_cores_in_use[i] | nth_free_core[i]);
+        end
     end
             
     // convert nth_free_cores to core_id 

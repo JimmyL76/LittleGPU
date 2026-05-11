@@ -28,7 +28,7 @@ module regs #(
     input logic clk, reset, 
     input warp_state_t warp_state,
     input logic warp_enable,
-    input logic [THREADS_PER_WARP-1:0] thread_enable, // execution mask for conditionals
+    input logic [THREADS_PER_WARP-1:0] execution_mask, // execution mask for conditionals
     // warp/block identifiers
     input data_t warp_id, block_id, block_size,
     // data + control signals
@@ -39,29 +39,31 @@ module regs #(
     // data/addr signals
     input logic [4:0] RS1Addr, RS2Addr, RDAddr,
     // output reg values, per thread
-    output data_t [$clog2(THREADS_PER_WARP)-1:0] rs1, rs2,
+    output data_t rs1 [THREADS_PER_WARP], rs2 [THREADS_PER_WARP],
     // input load reg values, per thread
-    input data_t [$clog2(THREADS_PER_WARP)-1:0] alu_out, lsu_out, next_pc
+    input data_t alu_out [THREADS_PER_WARP], lsu_out [THREADS_PER_WARP], next_pc [THREADS_PER_WARP]
     );
     
-    // designated registers for indexing, i = block id * block size + thread id
+    // designated registers for indexing, global id = block id * block size + thread id
+    // software programmer calculates this, so thread id is local not global by itself 
+    // (alt ex: thread id = global id = block id * block size + warp_id * THREADS_PER_WARP + t)
     localparam int ZERO_REG = 0;
     localparam int THREAD_ID_REG = 1;
     localparam int BLOCK_ID_REG = 2;
     localparam int BLOCK_SIZE_REG = 3;
     
-    // each thread gets its own set of 32 registers (on top of potentially 32 threads per warp)
-    data_t [$clog2(THREADS_PER_WARP)-1:0][REGS_PER_THREAD-1:0] registers;
+    // each thread gets its own set of 32 registers (ex: 32 threads per warp = 32*32 per warp)
+    data_t registers [THREADS_PER_WARP][REGS_PER_THREAD];
     
     // thread ids within this warp
-    data_t [$clog2(THREADS_PER_WARP)-1:0] thread_ids;
+    data_t thread_ids [THREADS_PER_WARP];
     genvar t;
     generate
         for (t = 0; t < THREADS_PER_WARP; t++)
             assign thread_ids[t] = warp_id * THREADS_PER_WARP + t;
     endgenerate
     
-    data_t [$clog2(THREADS_PER_WARP)-1:0] reg_load;
+    data_t reg_load [THREADS_PER_WARP];
     generate
         for (t = 0; t < THREADS_PER_WARP; t++)
             assign reg_load[t] = (IsBR_J == 2) ? next_pc[t] : 
@@ -76,24 +78,24 @@ module regs #(
                     registers[t][j] <= 0; // init all with 0s
         end else if (warp_enable) begin
             for (int t = 0; t < THREADS_PER_WARP; t++) begin
-                // update upon new warp activation, block/thread id could've updated
+                // always keep special registers updated (they're read-only from software perspective)
                 registers[t][ZERO_REG] <= 0;
                 registers[t][THREAD_ID_REG] <= thread_ids[t];
                 registers[t][BLOCK_ID_REG] <= block_id;
                 registers[t][BLOCK_SIZE_REG] <= block_size;
                 
                 // check execution mask and warp state
-                if (thread_enable[t]) begin
-                    if (warp_state == WARP_REQUEST) begin
-                        // if fully scalar, don't need vec regs
+                if (execution_mask[t]) begin
+                    if (warp_state == WARP_DECODE) begin
+                        // register read stage - if fully scalar, don't need vec regs
                         if (Scalar != 1) begin 
                             rs1[t] <= registers[t][RS1Addr];  
                             rs2[t] <= registers[t][RS2Addr]; 
                         end
-                    end else if (warp_state == WARP_UPDATE) begin
+                    end else if (warp_state == WARP_WRITEBACK) begin
                         // no update if read-only regs or scalar/vec-to-scalar
                         if (LdReg && (RDAddr > 3) && (!Scalar)) begin 
-                            registers[t][RDAddr] <= reg_load;
+                            registers[t][RDAddr] <= reg_load[t];
                         end
                     end
                 end

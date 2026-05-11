@@ -48,10 +48,9 @@ package common_pkg;
         WARP_IDLE,
         WARP_FETCH,
         WARP_DECODE,
-        WARP_REQUEST,
-        WARP_WAIT,
         WARP_EXECUTE,
-        WARP_UPDATE,
+        WARP_MEMORY,
+        WARP_WRITEBACK,
         WARP_DONE
     } warp_state_t;
     
@@ -63,10 +62,9 @@ package common_pkg;
     } lsu_state_t;
     
     // fetch state enum
-    typedef enum logic [1:0] {
+    typedef enum logic [0:0] {
         FETCHER_IDLE,
-        FETCHER_FETCHING,
-        FETCHER_DONE
+        FETCHER_FETCHING
     } fetcher_state_t;
     
                 
@@ -74,16 +72,16 @@ package common_pkg;
  
  // used module since functions can't take parameters
 module utility #(
-        parameter int NUM_CORES = 32
-        )(
-        input logic [NUM_CORES-1:0] nth_free_core,
-        output logic [$clog2(NUM_CORES)-1:0] onehot_to_binary 
-        );
-        always_comb begin
-            onehot_to_binary = -1; // if none are true
-            for (int i = 0; i < NUM_CORES; i++) 
-                if (nth_free_core[i]) onehot_to_binary = i; // this will only be true once
-        end
+    parameter int NUM_CORES = 32
+    )(
+    input logic [NUM_CORES-1:0] nth_free_core,
+    output logic [$clog2(NUM_CORES)-1:0] onehot_to_binary 
+    );
+    always_comb begin
+        onehot_to_binary = -1; // if none are true
+        for (int i = 0; i < NUM_CORES; i++) 
+            if (nth_free_core[i]) onehot_to_binary = i; // this will only be true once
+    end
 endmodule
     
 `endif

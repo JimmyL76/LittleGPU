@@ -33,78 +33,148 @@ module core #(
     input data_t core_id, core_block_id, 
     // instr mem - one per warp
     output logic [WARPS_PER_CORE-1:0] instr_mem_valid,
-    output instr_mem_addr_t [$clog2(WARPS_PER_CORE)-1:0] instr_mem_addr,
+    output instr_mem_addr_t instr_mem_addr [WARPS_PER_CORE],
     input logic [WARPS_PER_CORE-1:0] instr_mem_resp_ready,
-    input instr_t [$clog2(WARPS_PER_CORE)-1:0] instr_mem_resp_data,
+    input instr_t instr_mem_resp_data [WARPS_PER_CORE],
     // data mem - one per thread - extra lsu for warp scalar regs
     output logic [THREADS_PER_WARP:0] data_mem_valid,
-    output data_mem_addr_t [$clog2(THREADS_PER_WARP+1)-1:0] data_mem_addr,
-    output data_t [$clog2(THREADS_PER_WARP+1)-1:0] data_mem_data,
-    output logic [THREADS_PER_WARP:0] data_mem_we,
+    output data_mem_addr_t data_mem_addr [THREADS_PER_WARP+1],
+    output data_t data_mem_data [THREADS_PER_WARP+1],
+    output logic data_mem_we [THREADS_PER_WARP+1],
     input logic [THREADS_PER_WARP:0] data_mem_resp_ready,
-    input data_t [$clog2(THREADS_PER_WARP+1)-1:0] data_mem_resp_data
+    input data_t data_mem_resp_data [THREADS_PER_WARP+1]
     );
+
+    initial begin
+        if (THREADS_PER_WARP != `DATA_WIDTH) begin
+            $fatal(1, "Architecture constraint violated: THREADS_PER_WARP (%0d) must equal DATA_WIDTH (%0d)", 
+                THREADS_PER_WARP, `DATA_WIDTH);
+        end
+    end
     
     data_t num_warps; assign num_warps = kernel_config.num_warps_per_block;
     
     // warp signals    
-    warp_state_t [$clog2(WARPS_PER_CORE)-1:0] warp_state;
+    warp_state_t warp_state [WARPS_PER_CORE];
     
-    logic [$clog2(WARPS_PER_CORE)-1:0] current_warp;
-    warp_state_t current_warp_state; assign current_warp_state = warp_state[current_warp];
+    // resource allocation - separate execute (ALU) and memory (LSU) resources
+    logic [$clog2(WARPS_PER_CORE)-1:0] execute_warp;  // which warp owns ALU resources
+    logic execute_resources_busy;
+    logic [$clog2(WARPS_PER_CORE)-1:0] memory_warp;   // which warp owns LSU resources
+    logic memory_resources_busy;
+    
+    // execute resource valid check
+    logic execute_warp_valid;
+    assign execute_warp_valid = execute_resources_busy && (execute_warp < num_warps);
+    
+    // memory resource valid and type checks
+    logic memory_warp_valid;
+    assign memory_warp_valid = memory_resources_busy && (memory_warp < num_warps);
+    
+    logic memory_is_scalar;
+    assign memory_is_scalar = memory_warp_valid && (Scalar[memory_warp] == 1);
+    
+    logic memory_is_vector;
+    assign memory_is_vector = memory_warp_valid && (Scalar[memory_warp] != 1);
+    
+    // signals for the warp currently using execution resources
+    warp_state_t execute_warp_state; 
+    assign execute_warp_state = execute_warp_valid ? warp_state[execute_warp] : WARP_IDLE;
+    logic [THREADS_PER_WARP-1:0] execute_warp_execution_mask; 
+    assign execute_warp_execution_mask = execute_warp_valid ? warp_execution_mask[execute_warp] : 0;
+    
+    // signals for the warp currently using memory resources
+    warp_state_t memory_warp_state;
+    assign memory_warp_state = memory_warp_valid ? warp_state[memory_warp] : WARP_IDLE;
+    logic [THREADS_PER_WARP-1:0] memory_warp_execution_mask;
+    assign memory_warp_execution_mask = memory_warp_valid ? warp_execution_mask[memory_warp] : 0;
+    
+    // per-thread memory active signals (for gating LSU operations)
+    logic memory_thread_active [THREADS_PER_WARP];
+    always_comb begin
+        for (int t = 0; t < THREADS_PER_WARP; t++) begin
+            memory_thread_active[t] = memory_is_vector && memory_warp_execution_mask[t];
+        end
+    end
+    
     // per warp module signals
-    instr_mem_addr_t [$clog2(WARPS_PER_CORE)-1:0] pc, next_pc;
+    instr_mem_addr_t pc [WARPS_PER_CORE], next_pc [WARPS_PER_CORE];
     
-    fetcher_state_t [$clog2(WARPS_PER_CORE)-1:0] fetcher_state;
-    instr_t [$clog2(WARPS_PER_CORE)-1:0] fetched_instr;
+    logic fetcher_done [WARPS_PER_CORE];
+    instr_t fetched_instr [WARPS_PER_CORE];
     
-    logic [$clog2(WARPS_PER_CORE)-1:0][1:0] Scalar;
-    logic [$clog2(WARPS_PER_CORE)-1:0] LdReg;
-    logic [$clog2(WARPS_PER_CORE)-1:0][1:0] IsBR_J;
-    logic [$clog2(WARPS_PER_CORE)-1:0] DMemEN;
-    logic [$clog2(WARPS_PER_CORE)-1:0][1:0] DataSize;
-    logic [$clog2(WARPS_PER_CORE)-1:0] DMemR_W;
-    logic [$clog2(WARPS_PER_CORE)-1:0] Usign;
-    logic [$clog2(WARPS_PER_CORE)-1:0] RS1Mux;
-    logic [$clog2(WARPS_PER_CORE)-1:0][1:0] BR;
-    logic [$clog2(WARPS_PER_CORE)-1:0][3:0] ALUK;
-    logic [$clog2(WARPS_PER_CORE)-1:0] RS2Mux;
-    logic [$clog2(WARPS_PER_CORE)-1:0] Finish;
-    logic [$clog2(WARPS_PER_CORE)-1:0][4:0] RS1Addr, RS2Addr, RDAddr; 
-    data_t [$clog2(WARPS_PER_CORE)-1:0] IMM;
+    logic [1:0] Scalar [WARPS_PER_CORE];
+    logic LdReg [WARPS_PER_CORE];
+    logic [1:0] IsBR_J [WARPS_PER_CORE];
+    logic DMemEN [WARPS_PER_CORE];
+    logic [1:0] DataSize [WARPS_PER_CORE];
+    logic DMemR_W [WARPS_PER_CORE];
+    logic Usign [WARPS_PER_CORE];
+    logic RS1Mux [WARPS_PER_CORE];
+    logic [1:0] BR [WARPS_PER_CORE];
+    logic [3:0] ALUK [WARPS_PER_CORE];
+    logic RS2Mux [WARPS_PER_CORE];
+    logic Finish [WARPS_PER_CORE];
+    logic [4:0] RS1Addr [WARPS_PER_CORE], RS2Addr [WARPS_PER_CORE], RDAddr [WARPS_PER_CORE]; 
+    data_t IMM [WARPS_PER_CORE];
     
     // scalar registers
     // if THREADS_PER_WARP < data_t, upper bits are cut off of scalar registers[EXEC_MASK_REG]
-    logic [$clog2(WARPS_PER_CORE)-1:0][THREADS_PER_WARP-1:0] warp_execution_mask;
-    logic [THREADS_PER_WARP-1:0] current_warp_execution_mask; 
-    assign current_warp_execution_mask = warp_execution_mask[current_warp];
+    logic [THREADS_PER_WARP-1:0] warp_execution_mask [WARPS_PER_CORE];
+    data_t s_rs1_per_warp [WARPS_PER_CORE], s_rs2_per_warp [WARPS_PER_CORE];
     data_t s_rs1, s_rs2, s_lsu_out, s_alu_out, s_pc_jump, v_to_s_value;
     lsu_state_t s_lsu_state;
+    
+    // mux execute warp's scalar register outputs
+    assign s_rs1 = s_rs1_per_warp[execute_warp];
+    assign s_rs2 = s_rs2_per_warp[execute_warp];
+    
+    // registered scalar register values for memory stage (to keep stable when execute resources are freed)
+    data_t s_rs1_mem, s_rs2_mem;
+    data_t s_imm_mem;
+    logic [1:0] s_DataSize_mem;
+    logic s_DMemR_W_mem;
+    logic s_Usign_mem;
         
     // per thread module signals
-    data_t [$clog2(THREADS_PER_WARP)-1:0] rs1, rs2;
-    data_t [$clog2(THREADS_PER_WARP)-1:0] alu_out;
-    // all jump/br instr are actually scalar for now, TBD: conditional jump divergence logic
-    data_t [$clog2(THREADS_PER_WARP)-1:0] pc_jump; 
+    data_t rs1_per_warp [WARPS_PER_CORE][THREADS_PER_WARP], rs2_per_warp [WARPS_PER_CORE][THREADS_PER_WARP];
+    data_t rs1 [THREADS_PER_WARP], rs2 [THREADS_PER_WARP];
+    // mux execute warp's register outputs
+    always_comb begin
+        for (int t = 0; t < THREADS_PER_WARP; t++) begin
+            rs1[t] = execute_warp_valid ? rs1_per_warp[execute_warp][t] : 0;
+            rs2[t] = execute_warp_valid ? rs2_per_warp[execute_warp][t] : 0;
+        end
+    end
     
-    // logic [$clog2(THREADS_PER_WARP)-1:0] core_we;
-    lsu_state_t [$clog2(THREADS_PER_WARP)-1:0] lsu_state;
-    data_t [$clog2(THREADS_PER_WARP)-1:0] lsu_out;
+    // registered vector register values for memory stage (to keep stable when execute resources are freed)
+    data_t rs1_mem [THREADS_PER_WARP], rs2_mem [THREADS_PER_WARP];
+    data_t v_imm_mem;
+    logic [1:0] v_DataSize_mem;
+    logic v_DMemR_W_mem;
+    logic v_Usign_mem;
+    data_t alu_out [THREADS_PER_WARP];
+    // branches/jumps use scalar control flow (all threads share same PC)
+    // divergence handled via execution masks (predication), not per-thread PCs
+    data_t pc_jump [THREADS_PER_WARP]; 
+    
+    // logic core_we [THREADS_PER_WARP];
+    lsu_state_t lsu_state [THREADS_PER_WARP];
+    data_t lsu_out [THREADS_PER_WARP];
     
     // one per core modules, since we only run one warp at a time,
     // only one scalar alu and lsu is needed (only one scalar reg per warp)
     alu s_alu_inst(
-        .clk(clk), .reset(reset),
-        .warp_state(warp_state),
-        .pc(pc[current_warp]),
-        // data + control signals
-        .rs1(s_rs1), .rs2(s_rs2), .imm(IMM[current_warp]),
-        .IsBR_J(IsBR_J[current_warp]),
-        .Usign(Usign[current_warp]),
-        .RS1Mux(RS1Mux[current_warp]),
-        .BR(BR[current_warp]),
-        .ALUK(ALUK[current_warp]),
-        .RS2Mux(RS2Mux[current_warp]),
+        .pc(pc[execute_warp]),
+        .rs1(s_rs1), 
+        .rs2(s_rs2), 
+        .imm(IMM[execute_warp]),
+        .IsBR_J(IsBR_J[execute_warp]),
+        .Usign(Usign[execute_warp]),
+        .RS1Mux(RS1Mux[execute_warp]),
+        .BR(BR[execute_warp]),
+        .ALUK(ALUK[execute_warp]),
+        .RS2Mux(RS2Mux[execute_warp]),
         
         .alu_out(s_alu_out),
         .pc_jump(s_pc_jump)
@@ -112,12 +182,15 @@ module core #(
 
     lsu s_lsu_inst(
         .clk(clk), .reset(reset),
-        .warp_state(warp_state),
-        // data + control signals
-        .rs1(s_rs1), .rs2(s_rs2), .imm(IMM[current_warp]),
-        .DataSize(DataSize[current_warp]),
-        .DMemR_W(DMemR_W[current_warp]),
-        .Usign(Usign[current_warp]),
+        .warp_state(memory_warp_state),
+        .thread_active(memory_is_scalar),  // scalar LSU only for scalar instructions
+        // data + control signals - use registered values from execute stage
+        .rs1(s_rs1_mem), 
+        .rs2(s_rs2_mem), 
+        .imm(s_imm_mem),
+        .DataSize(s_DataSize_mem),
+        .DMemR_W(s_DMemR_W_mem),
+        .Usign(s_Usign_mem),
         // data mem - use the last data mem array values
         .mem_valid(data_mem_valid[THREADS_PER_WARP]),
         .mem_addr(data_mem_addr[THREADS_PER_WARP]),
@@ -144,13 +217,11 @@ module core #(
                 .mem_resp_ready(instr_mem_resp_ready[w]),
                 .mem_resp_data(instr_mem_resp_data[w]),
                 // output back to core
-                .out_fetcher_state(fetcher_state[w]),
+                .done(fetcher_done[w]),
                 .out_instr(fetched_instr[w])            
             );
         end for (w = 0; w < WARPS_PER_CORE; w++) begin : decode
             decoder decoder_inst(
-                .clk(clk), .reset(reset),
-                .warp_state(warp_state[w]),
                 .instr(fetched_instr[w]),
                 // control signals
                 .Scalar(Scalar[w]),
@@ -175,7 +246,7 @@ module core #(
             ) scalar_regs_inst(
                 .clk(clk), .reset(reset),
                 .warp_state(warp_state[w]),
-                .warp_enable((current_warp == w)), // enable when current_warp matches
+                .warp_enable(((execute_warp == w) && execute_resources_busy) || (warp_state[w] == WARP_WRITEBACK)), // enable when execute_warp matches or during writeback
                 .execution_mask(warp_execution_mask[w]), 
                 // data + control signals
                 .Scalar(Scalar[w]),
@@ -184,9 +255,10 @@ module core #(
                 .DMemEN(DMemEN[w]),               
                 // data/addr signals
                 .RS1Addr(RS1Addr[w]), .RS2Addr(RS2Addr[w]), .RDAddr(RDAddr[w]),
-                // output reg values, per thread
-                .rs1(scalar_rs1), .rs2(scalar_rs2),
+                // output reg values, per warp
+                .rs1(s_rs1_per_warp[w]), .rs2(s_rs2_per_warp[w]),
                 // input load reg values, per thread
+                // next_pc only ever used for JAL/JALR
                 .alu_out(s_alu_out), .lsu_out(s_lsu_out), .next_pc(pc[w] + 4), .v_to_s_value(v_to_s_value)
             );
         end for (w = 0; w < WARPS_PER_CORE; w++) begin : reg_file
@@ -196,7 +268,7 @@ module core #(
             ) regs_inst(
                 .clk(clk), .reset(reset),
                 .warp_state(warp_state[w]),
-                .warp_enable((current_warp == w)), // enable when current_warp matches
+                .warp_enable(((execute_warp == w) && execute_resources_busy) || (warp_state[w] == WARP_WRITEBACK)), // enable when execute_warp matches or during writeback
                 .execution_mask(warp_execution_mask[w]), 
                 // warp/block identifiers
                 .warp_id(w), .block_id(core_block_id), .block_size(num_warps * THREADS_PER_WARP),
@@ -208,7 +280,7 @@ module core #(
                 // data/addr signals
                 .RS1Addr(RS1Addr[w]), .RS2Addr(RS2Addr[w]), .RDAddr(RDAddr[w]),
                 // output reg values, per thread
-                .rs1(rs1), .rs2(rs2),
+                .rs1(rs1_per_warp[w]), .rs2(rs2_per_warp[w]),
                 // input load reg values, per thread - alu and lsu outputs for all threads
                 .alu_out(alu_out), .lsu_out(lsu_out), .next_pc(pc[w] + 4)
             );            
@@ -220,31 +292,37 @@ module core #(
     genvar t;
     generate
         for (t = 0; t < THREADS_PER_WARP; t++) begin : thread_alu
+            // vector ALUs - no gating, just direct connections
+            // register files handle all read/write gating
             alu alu_inst(
-                .clk(clk), .reset(reset),
-                .warp_state(warp_state),
-                .pc(pc[current_warp]),
-                // data + control signals
-                .rs1(rs1[t]), .rs2(rs2[t]), .imm(IMM[current_warp]), // constant immediates within warp
-                .IsBR_J(IsBR_J[current_warp]),
-                .Usign(Usign[current_warp]),
-                .RS1Mux(RS1Mux[current_warp]),
-                .BR(BR[current_warp]),
-                .ALUK(ALUK[current_warp]),
-                .RS2Mux(RS2Mux[current_warp]),
+                .pc(pc[execute_warp]),
+                .rs1(rs1[t]),
+                .rs2(rs2[t]),
+                .imm(IMM[execute_warp]),
+                .IsBR_J(IsBR_J[execute_warp]),
+                .Usign(Usign[execute_warp]),
+                .RS1Mux(RS1Mux[execute_warp]),
+                .BR(BR[execute_warp]),
+                .ALUK(ALUK[execute_warp]),
+                .RS2Mux(RS2Mux[execute_warp]),
                 
                 .alu_out(alu_out[t]),
                 .pc_jump(pc_jump[t])
             );
         end for (t = 0; t < THREADS_PER_WARP; t++) begin : thread_lsu
+            // vector LSUs - must gate by thread_active to prevent inactive threads from:
+            // making memory requests + being counted in lsu_done logic
             lsu lsu_inst(
                 .clk(clk), .reset(reset),
-                .warp_state(warp_state),
-                // data + control signals
-                .rs1(s_rs1), .rs2(s_rs2), .imm(IMM[current_warp]), 
-                .DataSize(DataSize[current_warp]),
-                .DMemR_W(DMemR_W[current_warp]),
-                .Usign(Usign[current_warp]),
+                .warp_state(memory_warp_state),
+                .thread_active(memory_thread_active[t]),  // gate by execution mask for vector only
+                // data + control signals - use registered values from execute stage
+                .rs1(rs1_mem[t]), 
+                .rs2(rs2_mem[t]), 
+                .imm(v_imm_mem),
+                .DataSize(v_DataSize_mem),
+                .DMemR_W(v_DMemR_W_mem),
+                .Usign(v_Usign_mem),
                 // data mem - use each thread's respective data mem array values
                 .mem_valid(data_mem_valid[t]),
                 .mem_addr(data_mem_addr[t]),
@@ -265,8 +343,8 @@ module core #(
         // the num of warps per block could be equal to or smaller than num of warps per core,
         // assuming each block can get totally assigned to just one core
         for (int w = 0; w < WARPS_PER_CORE; w++) begin
-            if (w < num_warps) done_array[1 << w] = (warp_state[w] == WARP_DONE); 
-            else done_array[1 << w] = 1;
+            if (w < num_warps) done_array[w] = (warp_state[w] == WARP_DONE); 
+            else done_array[w] = 1;
         end
     end
     assign done = &done_array;
@@ -275,51 +353,90 @@ module core #(
     logic [THREADS_PER_WARP-1:0] lsu_array;
     logic lsu_done;
     always_comb begin
-        for (int t = 0; t < THREADS_PER_WARP; t++) begin
-            lsu_array[1 << t] = (lsu_state[t] == LSU_DONE); 
+        if (memory_is_scalar) begin
+            // scalar load/store - check scalar LSU only
+            lsu_done = (s_lsu_state == LSU_DONE);
+        end else if (memory_is_vector) begin
+            // vector load/store - check all ACTIVE thread LSUs
+            for (int t = 0; t < THREADS_PER_WARP; t++) begin
+                if (memory_warp_execution_mask[t]) begin
+                    // active thread - check if LSU is done
+                    lsu_array[t] = (lsu_state[t] == LSU_DONE);
+                end else begin
+                    // inactive thread - always considered "done"
+                    lsu_array[t] = 1;
+                end
+            end
+            lsu_done = &lsu_array;
+        end else begin
+            lsu_done = 0;
         end
     end
-    assign lsu_done = &lsu_array;
     
-    // for choosing new warps
-    logic [WARPS_PER_CORE-1:0] first_free_warp, free_warps;
-    logic [$clog2(WARPS_PER_CORE)-1:0] first_free_warp_id;
-    generate
-        for (w = 0; w < WARPS_PER_CORE; w++) begin
-            assign free_warps[1 << w] = (warp_state[w] != WARP_IDLE) && 
-                                (warp_state[w] != WARP_FETCH) && 
-                                (warp_state[w] != WARP_DONE) && (w < num_warps);
-            assign first_free_warp = free_warps & (~free_warps + 1);
-        end
-    endgenerate
-    utility #(WARPS_PER_CORE) util_inst(first_free_warp, first_free_warp_id); // could be -1
-    
-    // for vector to scalar
+    // find next warp ready to execute (needs ALU resources)
+    logic [WARPS_PER_CORE-1:0] warps_ready_to_execute;
+    logic [$clog2(WARPS_PER_CORE)-1:0] next_execute_warp;
     always_comb begin
-        v_to_s_value = 0;
-        if (Scalar[current_warp] == 2) 
+        for (int w = 0; w < WARPS_PER_CORE; w++) begin
+            // warp is ready if it's in DECODE and resources are free
+            warps_ready_to_execute[w] = (warp_state[w] == WARP_DECODE) && (w < num_warps);
+        end
+    end
+    
+    // priority encoder to find first ready warp
+    logic [WARPS_PER_CORE-1:0] first_ready_warp_onehot;
+    assign first_ready_warp_onehot = warps_ready_to_execute & (~warps_ready_to_execute + 1);
+    utility #(WARPS_PER_CORE) exec_warp_selector(first_ready_warp_onehot, next_execute_warp);
+    
+    // find next warp ready for memory (needs LSU resources)
+    logic [WARPS_PER_CORE-1:0] warps_ready_for_memory;
+    logic [$clog2(WARPS_PER_CORE)-1:0] next_memory_warp;
+    always_comb begin
+        for (int w = 0; w < WARPS_PER_CORE; w++) begin
+            // warp is ready for memory if it's in MEMORY state
+            warps_ready_for_memory[w] = (warp_state[w] == WARP_MEMORY) && (w < num_warps);
+        end
+    end
+    
+    // priority encoder to find first ready warp for memory
+    logic [WARPS_PER_CORE-1:0] first_memory_warp_onehot;
+    assign first_memory_warp_onehot = warps_ready_for_memory & (~warps_ready_for_memory + 1);
+    utility #(WARPS_PER_CORE) mem_warp_selector(first_memory_warp_onehot, next_memory_warp);
+    
+    // for vector to scalar - always calculate, let scalar_regs gate the write
+    // NOTE: this operation requires THREADS_PER_WARP == DATA_WIDTH
+    always_comb begin
+        for (int t = 0; t < THREADS_PER_WARP; t++) 
+            v_to_s_value[t] = alu_out[t];
+    end
+
+    // for vector to scalar - always calculate, let scalar_regs gate the write
+    always_comb begin
+        for (int t = 0; t < THREADS_PER_WARP; t++) 
             // the number of threads per warp should equal data width so execution mask matches
-            for (int t = 0; t < THREADS_PER_WARP; t++) 
-                v_to_s_value[1 << t] = alu_out[t];
+            v_to_s_value[t] = alu_out[t];
     end
     
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin
             $display("Resetting core %d", core_id);
-            done <= 0;
-            current_warp <= 0;
+            execute_warp <= 0;
+            execute_resources_busy <= 0;
+            memory_warp <= 0;
+            memory_resources_busy <= 0;
             for (int w = 0; w < WARPS_PER_CORE; w++) begin
                 warp_state[w] <= WARP_IDLE;
-                fetcher_state[w] <= FETCHER_IDLE;
                 pc[w] <= 0;
             end
         end else if (start) begin // upon reset or starting again
             $display("Executing block %d on core %d", core_block_id, core_id);
-            current_warp <= 0;
+            execute_warp <= 0;
+            execute_resources_busy <= 0;
+            memory_warp <= 0;
+            memory_resources_busy <= 0;
             for (int w = 0; w < WARPS_PER_CORE; w++) begin // enter fetch state
                 if (w < num_warps) begin // extra warps in core don't matter
                     warp_state[w] <= WARP_FETCH;
-                    fetcher_state[w] <= FETCHER_IDLE;
                     pc[w] <= kernel_config.base_instr_addr;
                 end
             end
@@ -328,48 +445,111 @@ module core #(
             /* fetches and decodes happen in parallel across warps */
             for (int w = 0; w < WARPS_PER_CORE; w++) begin
                 if (w < num_warps) begin
-                    if (warp_state[w] == WARP_FETCH && fetcher_state[w] == FETCHER_DONE) begin
+                    if (warp_state[w] == WARP_FETCH && fetcher_done[w]) begin
                         $display("Warp %d at block %d fetched instr x%h at addr x%h", w, core_block_id, fetched_instr[w], pc[w]);
                         warp_state[w] <= WARP_DECODE;
                     end
                 end
             end
-            /* requests, executes, updates, and done happen when warp is chosen */
-            // choose new warp if ready, in WARP_UPDATE ideally, WARP_DONE if skipped update or no other warps were ready yet
-            if (current_warp_state == WARP_UPDATE || current_warp_state == WARP_DONE) begin
-                for (int w = 0; w < WARPS_PER_CORE; w++) begin
-                    if (w < num_warps) begin
-                        if (first_free_warp_id != -1) current_warp <= first_free_warp_id;
+            
+            /* grant execution resources to next ready warp */
+            if (!execute_resources_busy && (|warps_ready_to_execute)) begin
+                execute_warp <= next_execute_warp;
+                execute_resources_busy <= 1;
+                $display("Core %d: granting execution resources to warp %d", core_id, next_execute_warp);
+            end
+            
+            /* grant memory resources to next ready warp */
+            if (!memory_resources_busy && (|warps_ready_for_memory)) begin
+                memory_warp <= next_memory_warp;
+                memory_resources_busy <= 1;
+                $display("Core %d: granting memory resources to warp %d", core_id, next_memory_warp);
+            end
+            
+            /* execute stage - only for warp that owns execution resources */
+            if (execute_warp_valid) begin
+                case (warp_state[execute_warp]) 
+                    WARP_DECODE: begin // transition to execute
+                        warp_state[execute_warp] <= WARP_EXECUTE; 
+                    end
+                    WARP_EXECUTE: begin
+                        $display("Warp %d at block %d executing instr x%h at addr x%h", execute_warp, core_block_id, fetched_instr[execute_warp], pc[execute_warp]);
+                        $display("Execution mask: %32b", warp_execution_mask[execute_warp]);
+                        if (IsBR_J[execute_warp]) begin // branch/jump
+                            next_pc[execute_warp] <= (s_pc_jump) ? s_alu_out : pc[execute_warp] + 4;
+                        end else begin
+                            next_pc[execute_warp] <= pc[execute_warp] + 4;
+                        end
+                        // if load/store instruction, go to memory stage
+                        if (DMemEN[execute_warp]) begin
+                            warp_state[execute_warp] <= WARP_MEMORY;
+                            // register values for memory stage (to keep stable when execute resources are freed)
+                            if (Scalar[execute_warp] == 1) begin
+                                // scalar load/store
+                                s_rs1_mem <= s_rs1;
+                                s_rs2_mem <= s_rs2;
+                                s_imm_mem <= IMM[execute_warp];
+                                s_DataSize_mem <= DataSize[execute_warp];
+                                s_DMemR_W_mem <= DMemR_W[execute_warp];
+                                s_Usign_mem <= Usign[execute_warp];
+                            end else begin
+                                // vector load/store
+                                for (int t = 0; t < THREADS_PER_WARP; t++) begin
+                                    rs1_mem[t] <= rs1[t];
+                                    rs2_mem[t] <= rs2[t];
+                                end
+                                v_imm_mem <= IMM[execute_warp];
+                                v_DataSize_mem <= DataSize[execute_warp];
+                                v_DMemR_W_mem <= DMemR_W[execute_warp];
+                                v_Usign_mem <= Usign[execute_warp];
+                            end
+                        end else begin
+                            // alu/branch instructions release resources and go to writeback
+                            warp_state[execute_warp] <= WARP_WRITEBACK;
+                        end
+                        // free execute resources immediately after execute stage
+                        execute_resources_busy <= 0;
+                    end
+                    default: begin
+                        // warp left execution stage, free resources if still held
+                        if (warp_state[execute_warp] != WARP_DECODE && warp_state[execute_warp] != WARP_EXECUTE) begin
+                            execute_resources_busy <= 0;
+                        end
+                    end
+                endcase
+            end
+            
+            /* memory stage - only for warp that owns memory resources */
+            if (memory_warp_valid) begin
+                case (warp_state[memory_warp])
+                    WARP_MEMORY: begin // memory access for loads/stores
+                        if (lsu_done) begin
+                            warp_state[memory_warp] <= WARP_WRITEBACK;
+                            memory_resources_busy <= 0;  // free resources when memory completes
+                        end
+                    end
+                    default: begin
+                        // warp left memory stage, free resources if still held
+                        if (warp_state[memory_warp] != WARP_MEMORY) begin
+                            memory_resources_busy <= 0;
+                        end
+                    end
+                endcase
+            end
+            
+            /* writeback happens independently for each warp */
+            for (int w = 0; w < WARPS_PER_CORE; w++) begin
+                if (w < num_warps && warp_state[w] == WARP_WRITEBACK) begin
+                    $display("Warp %d at block %d finished executing instr x%h at addr x%h", w, core_block_id, fetched_instr[w], pc[w]);
+                    pc[w] <= next_pc[w];
+                    if (Finish[w]) begin
+                        warp_state[w] <= WARP_DONE;
+                        $display("Warp %d at block %d done", w, core_block_id);
+                    end else begin
+                        warp_state[w] <= WARP_FETCH;
                     end
                 end
             end
-            case (current_warp_state) 
-                WARP_IDLE: $display("Warp %d at block %d is idle", current_warp, core_block_id);
-                WARP_FETCH: $display("Warp %d at block %d is fetching", current_warp, core_block_id);
-                WARP_DECODE: begin // assuming decode only takes one cycle, skip if no load
-                    warp_state[current_warp] <= (DMemEN && (!DMemR_W)) ? WARP_REQUEST : WARP_EXECUTE; 
-                end
-                WARP_REQUEST: warp_state[current_warp] <= WARP_WAIT;
-                WARP_WAIT: begin // wait for lsu
-                    if (lsu_done) warp_state[current_warp] <= WARP_UPDATE; // don't need execute on loads
-                end
-                WARP_EXECUTE: begin
-                    $display("Warp %d at block %d executing instr x%h at addr x%h", current_warp, core_block_id, fetched_instr[current_warp], pc[current_warp]);
-                    $display("Execution mask: %32b", current_warp_execution_mask);
-                    if (Scalar[current_warp] && IsBR_J[current_warp]) begin // branch/jump
-                        next_pc[current_warp] <= (s_pc_jump) ? s_alu_out : pc[current_warp] + 4;
-                    end else begin
-                        next_pc[current_warp] <= pc[current_warp] + 4;
-                    end
-                    warp_state[current_warp] <= WARP_UPDATE; // assuming execute only takes one cycle
-                    
-                end
-                WARP_UPDATE: begin
-                    $display("Warp %d at block %d finished excuting instr x%h at addr x%h", current_warp, core_block_id, fetched_instr[current_warp], pc[current_warp]);
-                    warp_state[current_warp] <= (Finish[current_warp]) ? WARP_DONE : WARP_FETCH;
-                end
-                WARP_DONE: $display("Warp %d at block %d is done", current_warp, core_block_id);
-            endcase
         end
     end   
 endmodule
