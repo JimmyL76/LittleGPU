@@ -23,7 +23,7 @@ import common_pkg::*;
 
 // for simplicity, LSU is implemented per thread instead of per warp/thread group
 module lsu #(
-    parameter int CACHE_LINE_BYTE_SIZE = 4
+    parameter int MEM_LINE_BYTES = 4
     )(
     input logic clk, reset,
     input warp_state_t warp_state,
@@ -37,8 +37,9 @@ module lsu #(
     output logic mem_valid,
     output data_mem_addr_t mem_addr,
     output data_t mem_data,
-    output logic [CACHE_LINE_BYTE_SIZE-1:0] mem_we,
-    input logic mem_resp_ready,
+    output logic [MEM_LINE_BYTES-1:0] mem_we,
+    input logic mem_resp_valid,
+    output logic mem_resp_ready,
     input data_t mem_resp_data,
     // output back to core
     output lsu_state_t lsu_state_out,
@@ -51,9 +52,9 @@ module lsu #(
     
     // load & store + WE logic
     // the following section only works for byte-addressable with 32-bit channels (4 bytes)
-    // TBD: logic when CACHE_LINE_BYTE_SIZE is a larger multitude of 4
+    // TBD: logic when MEM_LINE_BYTES is a larger multitude of 4
     data_t load_result, store_result;
-    logic [CACHE_LINE_BYTE_SIZE-1:0] WE_result;
+    logic [MEM_LINE_BYTES-1:0] WE_result;
     logic [15:0] halfword_data;
     logic [7:0] byte_data;
     logic halfword_sign, byte_sign;
@@ -126,7 +127,7 @@ module lsu #(
     end
     
     data_t next_lsu_out, next_mem_data; assign next_lsu_out = load_result; assign next_mem_data = store_result; 
-    logic [CACHE_LINE_BYTE_SIZE-1:0] next_mem_we; assign next_mem_we = WE_result;
+    logic [MEM_LINE_BYTES-1:0] next_mem_we; assign next_mem_we = WE_result;
         
     lsu_state_t s;
     data_t lsu_out_reg;  // registered output for stability
@@ -138,6 +139,7 @@ module lsu #(
         mem_addr = 0;
         mem_data = 0;
         mem_we = 0;
+        mem_resp_ready = 0;
         lsu_out = lsu_out_reg;  // default to reg value
         
         // only initiate memory requests if thread is active
@@ -151,7 +153,8 @@ module lsu #(
             mem_addr = addr;  // hold address stable during request
             mem_data = next_mem_data;  // hold data stable
             mem_we = next_mem_we;  // hold write enable stable
-            if (mem_resp_ready) begin
+            mem_resp_ready = 1; // ready to accept response while in REQUESTING
+            if (mem_resp_valid) begin
                 lsu_out = next_lsu_out;  // pass through fresh data
             end
         end
@@ -173,7 +176,7 @@ module lsu #(
                         end
                     end
                     LSU_REQUESTING: begin
-                        if (mem_resp_ready) begin
+                        if (mem_resp_valid) begin
                             lsu_out_reg <= next_lsu_out;  // reg for stability
                             s <= LSU_DONE;
                         end

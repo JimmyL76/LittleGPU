@@ -21,16 +21,15 @@
 
 import common_pkg::*;
 
-module fetcher #(
-    parameter int CACHE_LINE_BYTE_SIZE = 4
-    )(
+module fetcher (
     input logic clk, reset,
     input warp_state_t warp_state,
     input instr_mem_addr_t pc,
     // instr mem
     output logic mem_valid,
     output instr_mem_addr_t mem_addr,
-    input logic mem_resp_ready,
+    input logic mem_resp_valid,
+    output logic mem_resp_ready,
     input instr_t mem_resp_data,
     // output back to core
     output logic done,
@@ -45,6 +44,7 @@ module fetcher #(
         // defaults
         mem_valid = 0;
         mem_addr = 0;
+        mem_resp_ready = 0;
         done = 0;
         out_instr = out_instr_reg;  // default to reg value
         
@@ -54,7 +54,8 @@ module fetcher #(
         end else if (s == FETCHER_FETCHING) begin
             mem_valid = 1;
             mem_addr = pc;  // hold address stable during fetch
-            if (mem_resp_ready) begin
+            mem_resp_ready = 1; // ready to accept response while fetching
+            if (mem_resp_valid) begin
                 done = 1;  // done when memory responds
                 out_instr = mem_resp_data;  // pass through fresh data
             end
@@ -73,7 +74,7 @@ module fetcher #(
                     end
                 end 
                 FETCHER_FETCHING: begin
-                    if (mem_resp_ready) begin
+                    if (mem_resp_valid) begin
                         out_instr_reg <= mem_resp_data;  // reg for stability
                         s <= FETCHER_IDLE;
                     end

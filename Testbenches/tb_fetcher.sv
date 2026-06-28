@@ -25,12 +25,13 @@ module tb_fetcher;
     instr_mem_addr_t pc;
     
     // Memory interface (from memory model)
-    logic mem_resp_ready;
+    logic mem_resp_valid;
     instr_t mem_resp_data;
     
     // DUT outputs
     logic mem_valid;
     instr_mem_addr_t mem_addr;
+    logic mem_resp_ready;  // fetcher drives high when fetching; mem model ignores it
     logic done;
     instr_t out_instr;
     
@@ -49,6 +50,7 @@ module tb_fetcher;
         .pc(pc),
         .mem_valid(mem_valid),
         .mem_addr(mem_addr),
+        .mem_resp_valid(mem_resp_valid),
         .mem_resp_ready(mem_resp_ready),
         .mem_resp_data(mem_resp_data),
         .done(done),
@@ -65,10 +67,11 @@ module tb_fetcher;
         .reset(reset),
         .valid(mem_valid),
         .addr(mem_addr),
-        .wdata(32'h0),  // no writes in fetcher
+        .wdata(32'h0),  // No writes in fetcher
         .we(mem_we),
-        .ready(),  // always ready
-        .resp_valid(mem_resp_ready),
+        .ready(),  // Always ready
+        .resp_valid(mem_resp_valid),
+        .resp_ready(mem_resp_ready),
         .rdata(mem_resp_data)
     );
     
@@ -140,7 +143,7 @@ module tb_fetcher;
         @(posedge clk); #1;  // Cycle 2: Memory pipeline stage 1 (captures request)
         compare_bit("Fetching_State_Still_FETCHING", fetcher_state, FETCHER_FETCHING, "fetching");
         
-        @(posedge clk);  // Cycle 3: Memory pipeline stage 2 (mem_resp_ready high on edge, state transitions on edge)
+        @(posedge clk);  // Cycle 3: Memory pipeline stage 2 (mem_resp_valid high on edge, state transitions on edge)
         // Sample done immediately after clock edge, before #1 delay
         compare_bit_simple(1'b1, done, "Response_Done_High");
         compare_data("Response_OutInstr", out_instr, 32'h12345678);
@@ -200,7 +203,7 @@ module tb_fetcher;
         compare_bit_simple(1'b0, done, "SM_FETCHING_Done_Low");
         compare_bit("SM_MemValid_Asserted", mem_valid, 1'b1, "valid");
         
-        // Test FETCHING → IDLE transition (when mem_resp_ready)
+        // Test FETCHING → IDLE transition (when mem_resp_valid)
         @(posedge clk); #1;  // Cycle 2: Memory pipeline stage 1
         
         @(posedge clk);  // Cycle 3: Memory pipeline stage 2, done pulses, state transitions

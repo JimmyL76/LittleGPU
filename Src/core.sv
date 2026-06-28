@@ -34,14 +34,16 @@ module core #(
     // instr mem - one per warp
     output logic [WARPS_PER_CORE-1:0] instr_mem_valid,
     output instr_mem_addr_t instr_mem_addr [WARPS_PER_CORE],
-    input logic [WARPS_PER_CORE-1:0] instr_mem_resp_ready,
+    input logic [WARPS_PER_CORE-1:0] instr_mem_resp_valid,
+    output logic [WARPS_PER_CORE-1:0] instr_mem_resp_ready,
     input instr_t instr_mem_resp_data [WARPS_PER_CORE],
     // data mem - one per thread - extra lsu for warp scalar regs
     output logic [THREADS_PER_WARP:0] data_mem_valid,
     output data_mem_addr_t data_mem_addr [THREADS_PER_WARP+1],
     output data_t data_mem_data [THREADS_PER_WARP+1],
-    output logic data_mem_we [THREADS_PER_WARP+1],
-    input logic [THREADS_PER_WARP:0] data_mem_resp_ready,
+    output logic [(`DATA_WIDTH/8)-1:0] data_mem_we [THREADS_PER_WARP+1],
+    input logic [THREADS_PER_WARP:0] data_mem_resp_valid,
+    output logic [THREADS_PER_WARP:0] data_mem_resp_ready,
     input data_t data_mem_resp_data [THREADS_PER_WARP+1]
     );
 
@@ -196,6 +198,7 @@ module core #(
         .mem_addr(data_mem_addr[THREADS_PER_WARP]),
         .mem_data(data_mem_data[THREADS_PER_WARP]),
         .mem_we(data_mem_we[THREADS_PER_WARP]),
+        .mem_resp_valid(data_mem_resp_valid[THREADS_PER_WARP]),
         .mem_resp_ready(data_mem_resp_ready[THREADS_PER_WARP]),
         .mem_resp_data(data_mem_resp_data[THREADS_PER_WARP]),
         // output back to core
@@ -214,6 +217,7 @@ module core #(
                 // instr mem
                 .mem_valid(instr_mem_valid[w]),
                 .mem_addr(instr_mem_addr[w]),
+                .mem_resp_valid(instr_mem_resp_valid[w]),
                 .mem_resp_ready(instr_mem_resp_ready[w]),
                 .mem_resp_data(instr_mem_resp_data[w]),
                 // output back to core
@@ -328,6 +332,7 @@ module core #(
                 .mem_addr(data_mem_addr[t]),
                 .mem_data(data_mem_data[t]),
                 .mem_we(data_mem_we[t]),
+                .mem_resp_valid(data_mem_resp_valid[t]),
                 .mem_resp_ready(data_mem_resp_ready[t]),
                 .mem_resp_data(data_mem_resp_data[t]),
                 // output back to core
@@ -404,16 +409,9 @@ module core #(
     utility #(WARPS_PER_CORE) mem_warp_selector(first_memory_warp_onehot, next_memory_warp);
     
     // for vector to scalar - always calculate, let scalar_regs gate the write
-    // NOTE: this operation requires THREADS_PER_WARP == DATA_WIDTH
+    // NOTE: this operation requires THREADS_PER_WARP == DATA_WIDTH (execution mask alignment)
     always_comb begin
         for (int t = 0; t < THREADS_PER_WARP; t++) 
-            v_to_s_value[t] = alu_out[t];
-    end
-
-    // for vector to scalar - always calculate, let scalar_regs gate the write
-    always_comb begin
-        for (int t = 0; t < THREADS_PER_WARP; t++) 
-            // the number of threads per warp should equal data width so execution mask matches
             v_to_s_value[t] = alu_out[t];
     end
     

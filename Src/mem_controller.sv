@@ -26,53 +26,60 @@ module mem_controller #(
     parameter int ADDR_WIDTH,
     parameter int NUM_USERS,
     parameter int NUM_CHANNELS,
-    // for now CACHE_LINE_BYTE_SIZE = 4 for simple implementation, TBD: larger byte cache lines
-    parameter int CACHE_LINE_BYTE_SIZE = 4 
+    // data ctrl moves whole line, so DATA_WIDTH = MEM_LINE_BYTES * 8
+    // instr ctrl stays narrow for word instrs
+    parameter int MEM_LINE_BYTES
     )(
     input logic clk, reset,
     // user requests interface used by fetch/LSUs
     output logic [NUM_USERS-1:0] req_ready, // tells user controller is ready for requests
     input logic [NUM_USERS-1:0] req_valid,
-    input logic [CACHE_LINE_BYTE_SIZE-1:0] req_we [NUM_USERS],
+    input logic [MEM_LINE_BYTES-1:0] req_we [NUM_USERS],
     input logic [ADDR_WIDTH-1:0] req_addr [NUM_USERS],
-    input logic [ADDR_WIDTH-1:0] req_data [NUM_USERS],
+    input logic [DATA_WIDTH-1:0] req_data [NUM_USERS],
     
     output logic [NUM_USERS-1:0] req_resp_valid, // tells user when mem access is done
-    output logic [ADDR_WIDTH-1:0] req_resp_data [NUM_USERS],
+    input logic [NUM_USERS-1:0] req_resp_ready, // user tells controller it can accept response
+    output logic [DATA_WIDTH-1:0] req_resp_data [NUM_USERS],
     // mem interface
-    // note this is restricted by # of mem channels, which may be smaller than # of users
+    // note this is restricted by # of mem channels, which is likely smaller than # of users
+    // mem_addr is dense per-channel line address - byte offset and channel-select
+    // bits stripped, so narrower than byte ADDR_WIDTH (see CH_ADDR_WIDTH)
     input logic [NUM_CHANNELS-1:0] mem_ready, // mem tells controller channel is ready for usage
     output logic [NUM_CHANNELS-1:0] mem_valid,
-    output logic [CACHE_LINE_BYTE_SIZE-1:0] mem_we [NUM_CHANNELS],
-    output logic [ADDR_WIDTH-1:0] mem_addr [NUM_CHANNELS],
-    output logic [ADDR_WIDTH-1:0] mem_data [NUM_CHANNELS],
+    output logic [MEM_LINE_BYTES-1:0] mem_we [NUM_CHANNELS],
+    output logic [ADDR_WIDTH-$clog2(MEM_LINE_BYTES)-$clog2(NUM_CHANNELS)-1:0] mem_addr [NUM_CHANNELS],
+    output logic [DATA_WIDTH-1:0] mem_data [NUM_CHANNELS],
     
     input logic [NUM_CHANNELS-1:0] mem_resp_valid, // mem tells controller when done
-    input logic [ADDR_WIDTH-1:0] mem_resp_data [NUM_CHANNELS]
+    output logic [NUM_CHANNELS-1:0] mem_resp_ready, // controller tells mem it can accept response (always 1 now)
+    input logic [DATA_WIDTH-1:0] mem_resp_data [NUM_CHANNELS]
     );
     
-//    typedef enum logic [2:0] {
-//        IDLE, R_WAIT, W_WAIT, R_IN_PROG, W_IN_PROG
-//    } state_t;
-//    state_t [NUM_CHANNELS-1:0] s;
-
-    // comb next output signals
-    // req_ready is an asynchronous output, but is updated on clock edge (no timing issues)
-    // logic [NUM_USERS-1:0] next_req_resp_valid; 
-    // logic [ADDR_WIDTH-1:0] next_req_resp_data [NUM_USERS];
-    logic [NUM_CHANNELS-1:0] next_mem_valid;
-    logic [CACHE_LINE_BYTE_SIZE-1:0] next_mem_we [NUM_CHANNELS];
-    logic [ADDR_WIDTH-1:0] next_mem_addr [NUM_CHANNELS];
-    logic [ADDR_WIDTH-1:0] next_mem_data [NUM_CHANNELS];
+    // per-channel address: byte address with line-offset and channel-select bits
+    // stripped (both constant for one channel's line accesses)
+    localparam int CH_ADDR_LSB = $clog2(MEM_LINE_BYTES) + $clog2(NUM_CHANNELS);
+    localparam int CH_ADDR_WIDTH = ADDR_WIDTH - CH_ADDR_LSB;
     
-    // address decoding - process begins with which channel each user wants
+    // comb next output signals
+    // req_ready is async (driven by arbiter), so no next_ version needed
+    logic [NUM_CHANNELS-1:0] next_mem_valid;
+    logic [MEM_LINE_BYTES-1:0] next_mem_we [NUM_CHANNELS];
+    logic [CH_ADDR_WIDTH-1:0] next_mem_addr [NUM_CHANNELS];
+    logic [DATA_WIDTH-1:0] next_mem_data [NUM_CHANNELS];
+    
+    // address decoding - pick which channel each user's request goes to
+    // byte address layout: [ row | channel | offset within line ]
+    //   - low $clog2(MEM_LINE_BYTES) bits are byte offset within line - skipped so whole line stays on one channel
+    //   - next $clog2(NUM_CHANNELS) bits select channel - middle-bit interleaving fans adjacent thread accesses (base + tid*line_size) across channels
+    //   - upper bits become per-channel address (row inside that channel's memory)
+    // ex: MEM_LINE_BYTES=4, NUM_CHANNELS=8 -> bits [4:2] select channel, bits [1:0] byte-in-line, bits [31:5] row
+    // assumes both MEM_LINE_BYTES and NUM_CHANNELS are powers of 2
     logic [$clog2(NUM_CHANNELS)-1:0] user_channel [NUM_USERS];
-    // lowest bit used is right above the last bit that changes within a (power of 2) cache line, ex: bit 7 for 64 bytes
-    // # of bits based on NUM_CHANNELS, ex: 3 bits for 8 channels
     genvar u, c;
     generate
         for (u = 0; u < NUM_USERS; u++) 
-            assign user_channel[u] = req_addr[u][$clog2((CACHE_LINE_BYTE_SIZE)+1)+:($clog2(NUM_CHANNELS)-1)];
+            assign user_channel[u] = req_addr[u][$clog2(MEM_LINE_BYTES) +: $clog2(NUM_CHANNELS)];
     endgenerate
     
     // request routing - per channel, set bits for which users will want to request from that channel
@@ -92,7 +99,7 @@ module mem_controller #(
                 .channel_free(mem_resp_valid[c]), // easier logic vs tracking user for req_resp_valid
                 .channel_reqs(channel_reqs[c]),
                 .channel_grants(channel_grants[c]),
-                .c(c) // just for display statement
+                .req_ready(arb_req_ready[c])
             );
         end
     endgenerate
@@ -101,7 +108,29 @@ module mem_controller #(
     logic [NUM_CHANNELS-1:0] next_pending, pending; // keep track of channel state
     logic [$clog2(NUM_USERS)-1:0] next_user_granted [NUM_CHANNELS], user_granted [NUM_CHANNELS]; // track user 
     logic [NUM_USERS-1:0] next_req_resp_valid;
-    logic [ADDR_WIDTH-1:0] next_req_resp_data [NUM_USERS];
+    logic [DATA_WIDTH-1:0] next_req_resp_data [NUM_USERS];
+
+    // per-channel req_ready from each arbiter, OR-reduce across channels for
+    // top-level req_ready (given user only targets one channel at once)
+    logic [NUM_USERS-1:0] arb_req_ready [NUM_CHANNELS];
+    always_comb begin
+        req_ready = '0;
+        for (int c = 0; c < NUM_CHANNELS; c++) begin
+            req_ready |= arb_req_ready[c];
+        end
+    end
+    
+    // controller always ready to accept memory responses, capture handled by pending logic
+    assign mem_resp_ready = '1;
+    
+    // user must hold req_resp_ready while awaiting own response bc no response buffering
+    generate
+        for (genvar gu = 0; gu < NUM_USERS; gu++) begin : resp_ready_chk
+            assert property (@(posedge clk) disable iff (!reset)
+                req_resp_valid[gu] |-> req_resp_ready[gu])
+                else $error("mem_controller: user %0d response dropped without resp_ready", gu);
+        end
+    endgenerate
     
     always_comb begin
         // default resp signals
@@ -113,11 +142,13 @@ module mem_controller #(
         for (int c = 0; c < NUM_CHANNELS; c++) begin 
             next_mem_addr[c] = mem_addr[c]; next_mem_data[c] = mem_data[c]; next_mem_we[c] = mem_we[c]; 
             next_mem_valid[c] = 0; next_pending[c] = 0; // default values
+            next_user_granted[c] = user_granted[c]; // hold by default
         
             if (|channel_grants[c]) begin // upon channel first being granted
                 for (int u = 0; u < NUM_USERS; u++) begin
                     if (channel_grants[c][u]) begin 
-                        next_mem_addr[c] = req_addr[u];
+                        // strip line-offset + channel-select bits -> dense per-channel addr
+                        next_mem_addr[c] = req_addr[u][ADDR_WIDTH-1 : CH_ADDR_LSB];
                         next_mem_data[c] = req_data[u];
                         next_mem_we[c] = req_we[u];
                         next_mem_valid[c] = 1;
@@ -150,6 +181,7 @@ module mem_controller #(
                 mem_we[c] <= 0;
                 mem_addr[c] <= 0;
                 mem_data[c] <= 0;
+                user_granted[c] <= 0;
             end
             for (int u = 0; u < NUM_USERS; u++) begin
                 req_resp_data[u] <= 0;
@@ -160,8 +192,9 @@ module mem_controller #(
             req_resp_valid <= next_req_resp_valid;
             for (int c = 0; c < NUM_CHANNELS; c++) begin
                 mem_we[c] <= next_mem_we[c];
-                mem_addr[c] <= next_mem_addr[c][ADDR_WIDTH-1:2]; // word (4 bytes) based mem, addr/4
+                mem_addr[c] <= next_mem_addr[c]; // already dense per-channel line addr
                 mem_data[c] <= next_mem_data[c];
+                user_granted[c] <= next_user_granted[c];
             end
             for (int u = 0; u < NUM_USERS; u++) begin
                 req_resp_data[u] <= next_req_resp_data[u];
@@ -171,10 +204,9 @@ module mem_controller #(
     
 endmodule
 
-/* 
-    use a simple arbiter with basic rotating priority
-    we assume for simplicity there is no real priority within each block/warp/thread
-*/
+// per-channel round-robin arbiter, masked priority encoders,
+// after granting user U, priority rotates so U is lowest next round
+// single requester always wins immediately, but bounded wait NUM_USERS-1
 module arbiter #(
         parameter int NUM_USERS, 
         parameter int NUM_CHANNELS
@@ -183,47 +215,52 @@ module arbiter #(
         input logic channel_free,
         input logic [NUM_USERS-1:0] channel_reqs,
         output logic [NUM_USERS-1:0] channel_grants,
-        output logic [NUM_USERS-1:0] req_ready,
-        input logic [$clog2(NUM_CHANNELS)-1:0] c
+        output logic [NUM_USERS-1:0] req_ready
     );
     
-    // priority will essentially be one-hot, only one user per channel gets a value of 1 at a time
-    logic [NUM_USERS-1:0] prio_mask;
+    // one-hot, marks highest-priority user for this round
+    logic [NUM_USERS-1:0] prio, next_prio;
     
-    typedef enum {
+    typedef enum logic {
         READY, BUSY
-    } state_t; // 
+    } state_t;
     state_t s, next_s;
     
+    // prefer reqs at or above prio, else wrap, lowest set bit is x & (~x + 1)
+    logic [NUM_USERS-1:0] mask, grant_masked, grant_wrap, grant;
+    assign mask = channel_reqs & ~(prio - 1);
+    assign grant_masked = mask & (~mask + 1);
+    assign grant_wrap = channel_reqs & (~channel_reqs + 1);
+    assign grant = (|mask) ? grant_masked : grant_wrap;
+    
     always_comb begin
-        channel_grants = 0; req_ready = 0; // default
+        channel_grants = '0;
+        req_ready = '0;
+        next_s = s;
         case (s)
-            READY: begin // in READY check for possible grants
-                next_s = READY;
-                for (int u = 0; u < NUM_USERS; u++) begin
-                    if (channel_reqs[u] && prio_mask[u]) begin
-                        // these signals will only be 1 cycle long due to channel_reqs (req_valid)
-                        channel_grants[u] = 1'b1;
-                        req_ready = 1; // handshake to user that req has been granted
-                        next_s = BUSY;
-                        $display("Mem_Ctr: Granting user %d to channel %d", u, c);
-                    end
-                end
+            READY: if (|channel_reqs) begin
+                channel_grants = grant;
+                req_ready = grant;
+                next_s = BUSY;
             end
-            BUSY: begin // in BUSY wait until req_ready 
-                if (channel_free) next_s = READY;
-                else next_s = BUSY;
-            end
+            BUSY: if (channel_free) next_s = READY;
         endcase
     end
     
+    // advance pointer past granted user, rotate one-hot grant left
+    always_comb begin
+        next_prio = prio;
+        if (|channel_grants)
+            next_prio = {channel_grants[NUM_USERS-2:0], channel_grants[NUM_USERS-1]};
+    end
+    
     always_ff @(posedge clk or negedge reset) begin
-        if (!reset) begin // on reset start with user 0
-            prio_mask <= 1; 
+        if (!reset) begin
+            prio <= 'b1; // user 0 highest priority first
             s <= READY;
-        end else if (channel_free) begin // rotate left only once channel frees up again
-            prio_mask <= {prio_mask[NUM_USERS-2:0], prio_mask[NUM_USERS-1]};
+        end else begin
             s <= next_s;
+            prio <= next_prio;
         end
     end
 

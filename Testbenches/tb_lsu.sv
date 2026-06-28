@@ -29,7 +29,7 @@ module tb_lsu;
     logic Usign;
     
     // Memory interface (from memory model)
-    logic mem_resp_ready;
+    logic mem_resp_valid;
     data_t mem_resp_data;
     
     // DUT outputs
@@ -37,6 +37,7 @@ module tb_lsu;
     data_mem_addr_t mem_addr;
     data_t mem_data;
     logic [3:0] mem_we;
+    logic mem_resp_ready;  // lsu drives high when waiting; mem model ignores it
     lsu_state_t lsu_state_out;
     data_t lsu_out;
     
@@ -56,6 +57,7 @@ module tb_lsu;
         .mem_addr(mem_addr),
         .mem_data(mem_data),
         .mem_we(mem_we),
+        .mem_resp_valid(mem_resp_valid),
         .mem_resp_ready(mem_resp_ready),
         .mem_resp_data(mem_resp_data),
         .lsu_state_out(lsu_state_out),
@@ -74,8 +76,9 @@ module tb_lsu;
         .addr(mem_addr),
         .wdata(mem_data),
         .we(mem_we),
-        .ready(),  // always ready
-        .resp_valid(mem_resp_ready),
+        .ready(),  // Always ready
+        .resp_valid(mem_resp_valid),
+        .resp_ready(mem_resp_ready),
         .rdata(mem_resp_data)
     );
     
@@ -483,7 +486,7 @@ module tb_lsu;
         @(posedge clk); #1;  // Memory pipeline stage 1
         compare_bit("SM_State_Still_REQUESTING", lsu_state_out, LSU_REQUESTING, "requesting");
         
-        @(posedge clk);  // Memory pipeline stage 2, mem_resp_ready goes high
+        @(posedge clk);  // Memory pipeline stage 2, mem_resp_valid goes high
         #1;
         compare_bit("SM_State_DONE", lsu_state_out, LSU_DONE, "done");
         compare_bit_simple(1'b0, mem_valid, "SM_MemValid_Low");
