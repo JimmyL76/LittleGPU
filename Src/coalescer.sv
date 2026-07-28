@@ -12,7 +12,7 @@ module coalescer #(
     input logic [THREADS_PER_WARP-1:0] lsu_valid,
     input data_mem_addr_t lsu_addr [THREADS_PER_WARP],
     input data_t lsu_data [THREADS_PER_WARP],
-    input logic [(`DATA_WIDTH/8)-1:0] lsu_we [THREADS_PER_WARP],
+    input logic [($bits(data_t)/8)-1:0] lsu_we [THREADS_PER_WARP],
     output logic [THREADS_PER_WARP-1:0] lsu_resp_valid,
     input logic [THREADS_PER_WARP-1:0] lsu_resp_ready,
     output data_t lsu_resp_data [THREADS_PER_WARP],
@@ -29,7 +29,7 @@ module coalescer #(
 
     // derived widths
     localparam int LINE_BITS = MEM_LINE_BYTES * 8;
-    localparam int WORD_BYTES = `DATA_WIDTH / 8; // bytes per lsu word (4)
+    localparam int WORD_BYTES = DATA_WIDTH / 8; // bytes per lsu word (4)
     localparam int WORDS_PER_LINE = MEM_LINE_BYTES / WORD_BYTES;
     // # of addr bits below line boundary (byte-in-line offset)
     localparam int LINE_BYTE_OFF_BITS = $clog2(MEM_LINE_BYTES);
@@ -59,7 +59,7 @@ module coalescer #(
     end
     
     // line id = address with byte-in-line offset stripped
-    typedef logic [`DATA_MEM_ADDR_WIDTH-LINE_BYTE_OFF_BITS-1:0] line_id_t;
+    typedef logic [DATA_MEM_ADDR_WIDTH-LINE_BYTE_OFF_BITS-1:0] line_id_t;
     
     // per-thread latched state, captured at round start, held stable across groups
     line_id_t latched_line_id [THREADS_PER_WARP];
@@ -144,7 +144,7 @@ module coalescer #(
         lsu_resp_valid = '0;
         // per-thread word slice
         for (int t = 0; t < THREADS_PER_WARP; t++) begin
-            lsu_resp_data[t] = mem_resp_data[latched_word_off[t]*`DATA_WIDTH +: `DATA_WIDTH];
+            lsu_resp_data[t] = mem_resp_data[latched_word_off[t]*DATA_WIDTH +: DATA_WIDTH];
         end
         
         case (s)
@@ -203,7 +203,7 @@ module coalescer #(
                             latched_addr[t] <= lsu_addr[t];
                             latched_data[t] <= lsu_data[t];
                             latched_we[t] <= lsu_we[t];
-                            latched_line_id[t] <= lsu_addr[t][`DATA_MEM_ADDR_WIDTH-1:LINE_BYTE_OFF_BITS];
+                            latched_line_id[t] <= lsu_addr[t][DATA_MEM_ADDR_WIDTH-1:LINE_BYTE_OFF_BITS];
                             // word slot: addr bits between word boundary and line boundary
                             // degenerates to 0 when WORDS_PER_LINE == 1 (4-byte line)
                             if (WORDS_PER_LINE > 1)

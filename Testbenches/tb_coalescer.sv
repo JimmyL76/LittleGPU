@@ -34,7 +34,7 @@ module tb_coalescer_harness #(
     // Derived widths
     // -----------------------------------------------------------------------
     localparam int LINE_BITS  = MEM_LINE_BYTES * 8;
-    localparam int WORD_BYTES = `DATA_WIDTH / 8;
+    localparam int WORD_BYTES = DATA_WIDTH / 8;
     localparam int LINE_SHIFT = $clog2(MEM_LINE_BYTES);
 
     // -----------------------------------------------------------------------

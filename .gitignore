@@ -1,0 +1,26 @@
+# XSim build output (run_tests.ps1 builds each test in its own dir here)
+.sim/
+xsim.dir/
+
+# Vivado / XSim droppings
+*.jou
+*.log
+*.pb
+*.wdb
+*.str
+.Xil/
+webtalk*.jou
+webtalk*.log
+
+# Vivado GUI project artifacts, if a project is ever created in-tree
+*.cache/
+*.runs/
+*.hw/
+*.sim/
+*.ip_user_files/
+*.gen/
+*.xpr.backup
+
+# Assembler build output
+Assembler/*.exe
+Assembler/*.o

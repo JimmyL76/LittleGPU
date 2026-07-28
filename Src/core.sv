@@ -41,16 +41,16 @@ module core #(
     output logic [THREADS_PER_WARP:0] data_mem_valid,
     output data_mem_addr_t data_mem_addr [THREADS_PER_WARP+1],
     output data_t data_mem_data [THREADS_PER_WARP+1],
-    output logic [(`DATA_WIDTH/8)-1:0] data_mem_we [THREADS_PER_WARP+1],
+    output logic [(DATA_WIDTH/8)-1:0] data_mem_we [THREADS_PER_WARP+1],
     input logic [THREADS_PER_WARP:0] data_mem_resp_valid,
     output logic [THREADS_PER_WARP:0] data_mem_resp_ready,
     input data_t data_mem_resp_data [THREADS_PER_WARP+1]
     );
 
     initial begin
-        if (THREADS_PER_WARP != `DATA_WIDTH) begin
+        if (THREADS_PER_WARP != DATA_WIDTH) begin
             $fatal(1, "Architecture constraint violated: THREADS_PER_WARP (%0d) must equal DATA_WIDTH (%0d)", 
-                THREADS_PER_WARP, `DATA_WIDTH);
+                THREADS_PER_WARP, DATA_WIDTH);
         end
     end
     

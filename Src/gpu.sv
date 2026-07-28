@@ -43,14 +43,14 @@ module gpu #(
     // instr mem - word-wide
     // addr is dense per-channel line address, byte width minus line-offset and channel bits
     output logic [NUM_INSTR_CHANNELS-1:0] instr_mem_valid,
-    output logic [`INSTR_MEM_ADDR_WIDTH-$clog2(`INSTR_WIDTH/8)-$clog2(NUM_INSTR_CHANNELS)-1:0] instr_mem_addr [NUM_INSTR_CHANNELS],
+    output logic [INSTR_MEM_ADDR_WIDTH-$clog2(INSTR_WIDTH/8)-$clog2(NUM_INSTR_CHANNELS)-1:0] instr_mem_addr [NUM_INSTR_CHANNELS],
     input logic [NUM_INSTR_CHANNELS-1:0] instr_mem_ready,
     input instr_t instr_mem_resp_data [NUM_INSTR_CHANNELS],
     input logic [NUM_INSTR_CHANNELS-1:0] instr_mem_resp_valid,
     output logic [NUM_INSTR_CHANNELS-1:0] instr_mem_resp_ready,
     // data mem - line-wide (data, we, resp_data scaled by MEM_LINE_BYTES)
     output logic [NUM_DATA_CHANNELS-1:0] data_mem_valid,
-    output logic [`DATA_MEM_ADDR_WIDTH-$clog2(MEM_LINE_BYTES)-$clog2(NUM_DATA_CHANNELS)-1:0] data_mem_addr [NUM_DATA_CHANNELS],
+    output logic [DATA_MEM_ADDR_WIDTH-$clog2(MEM_LINE_BYTES)-$clog2(NUM_DATA_CHANNELS)-1:0] data_mem_addr [NUM_DATA_CHANNELS],
     output logic [MEM_LINE_BYTES*8-1:0] data_mem_data [NUM_DATA_CHANNELS],
     output logic [MEM_LINE_BYTES-1:0] data_mem_we [NUM_DATA_CHANNELS],
     input logic [NUM_DATA_CHANNELS-1:0] data_mem_ready,
@@ -97,9 +97,9 @@ module gpu #(
     logic [NUM_FETCHERS-1:0] fetcher_mem_resp_ready;
     instr_t fetcher_mem_resp_data [NUM_FETCHERS];
     // instr fetch is read-only, drive zero we/data to controller, leave its outputs in unused nets
-    logic [(`INSTR_WIDTH/8)-1:0] fetcher_mem_we [NUM_FETCHERS];
+    logic [(INSTR_WIDTH/8)-1:0] fetcher_mem_we [NUM_FETCHERS];
     instr_t fetcher_mem_data [NUM_FETCHERS];
-    logic [(`INSTR_WIDTH/8)-1:0] instr_mem_we_unused [NUM_INSTR_CHANNELS];
+    logic [(INSTR_WIDTH/8)-1:0] instr_mem_we_unused [NUM_INSTR_CHANNELS];
     instr_t instr_mem_data_unused [NUM_INSTR_CHANNELS];
     always_comb begin
         for (int i = 0; i < NUM_FETCHERS; i++) begin
@@ -113,7 +113,7 @@ module gpu #(
     logic [NUM_LSUS-1:0] lsu_mem_valid;
     data_mem_addr_t lsu_mem_addr [NUM_LSUS];
     data_t lsu_mem_data [NUM_LSUS];
-    logic [(`DATA_WIDTH/8)-1:0] lsu_mem_we [NUM_LSUS];
+    logic [(DATA_WIDTH/8)-1:0] lsu_mem_we [NUM_LSUS];
     logic [NUM_LSUS-1:0] lsu_mem_resp_valid;
     logic [NUM_LSUS-1:0] lsu_mem_resp_ready;
     data_t lsu_mem_resp_data [NUM_LSUS];
@@ -143,11 +143,11 @@ module gpu #(
     
     // instr mem controller
     mem_controller #(
-        .DATA_WIDTH(`INSTR_WIDTH),
-        .ADDR_WIDTH(`INSTR_MEM_ADDR_WIDTH),
+        .DATA_WIDTH(INSTR_WIDTH),
+        .ADDR_WIDTH(INSTR_MEM_ADDR_WIDTH),
         .NUM_USERS(NUM_FETCHERS),
         .NUM_CHANNELS(NUM_INSTR_CHANNELS),
-        .MEM_LINE_BYTES(`INSTR_WIDTH/8) // instr stays word-sized
+        .MEM_LINE_BYTES(INSTR_WIDTH/8) // instr stays word-sized
     ) instr_mem_controller(
         .clk(clk), .reset(reset),
         // user requests interface used by fetch/LSUs
@@ -175,7 +175,7 @@ module gpu #(
     // data mem controller - line-wide, one user port per (core, vec/scalar)
     mem_controller #(
         .DATA_WIDTH(LINE_BITS),
-        .ADDR_WIDTH(`DATA_MEM_ADDR_WIDTH),
+        .ADDR_WIDTH(DATA_MEM_ADDR_WIDTH),
         .NUM_USERS(NUM_DATA_USERS),
         .NUM_CHANNELS(NUM_DATA_CHANNELS),
         .MEM_LINE_BYTES(MEM_LINE_BYTES)
@@ -240,7 +240,7 @@ module gpu #(
             logic [0:0] scl_lsu_valid_arr;
             data_mem_addr_t scl_lsu_addr_arr [1];
             data_t scl_lsu_data_arr [1];
-            logic [(`DATA_WIDTH/8)-1:0] scl_lsu_we_arr [1];
+            logic [(DATA_WIDTH/8)-1:0] scl_lsu_we_arr [1];
             logic [0:0] scl_lsu_resp_valid_arr;
             logic [0:0] scl_lsu_resp_ready_arr;
             data_t scl_lsu_resp_data_arr [1];
