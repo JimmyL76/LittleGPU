@@ -25,18 +25,18 @@ private:
 
         instrInfo(eType t = R, uint32_t f3 = 0, uint32_t f7 = 0, bool s = false) : funct3(f3), funct7(f7), type(t), scalar(s) {
             switch(t) { // derive opcode from type (with some subtypes)
-                case R: opcode = 0b0110011;
-                case I_AR: opcode = 0b0010011;
-                case I_LD: opcode = 0b0000011;
-                case S: opcode = 0b0100011;
-                case B: opcode = 0b1100011;
-                case J: opcode = 0b1101111;
-                case I_JALR: opcode = 0b1100111;
-                case U_LUI: opcode = 0b0110111;
-                case U_AUIPC: opcode = 0b0010111;
-                case SX_S: opcode = 0b1111110;
-                case SX_I: opcode = 0b1111101;
-                case HALT: opcode = 0b0000000;
+                case R: opcode = 0b0110011; break;
+                case I_AR: opcode = 0b0010011; break;
+                case I_LD: opcode = 0b0000011; break;
+                case S: opcode = 0b0100011; break;
+                case B: opcode = 0b1100011; break;
+                case J: opcode = 0b1101111; break;
+                case I_JALR: opcode = 0b1100111; break;
+                case U_LUI: opcode = 0b0110111; break;
+                case U_AUIPC: opcode = 0b0010111; break;
+                case SX_S: opcode = 0b1111110; break;
+                case SX_I: opcode = 0b1111101; break;
+                case HALT: opcode = 0b0000000; break;
             }
         }
     };
@@ -202,8 +202,13 @@ private:
     }
 
     uint32_t encodeInstr(uint32_t opcode, eType type, uint32_t rd, uint32_t rs1, uint32_t rs2, int32_t imm, uint32_t funct3, uint32_t funct7, bool scalar) {
-        // set scalar bit if needed
-        if (scalar) opcode |= (1 << 6); 
+        // special case: scalar stores use custom opcode 0x7B to avoid conflict with branches (0x63)
+        if (scalar && type == S) {
+            opcode = 0b1111011; // 0x7B - custom scalar store opcode
+        } else if (scalar) {
+            // for other instructions, set bit 6 for scalar variant
+            opcode |= (1 << 6); 
+        }
 
         if (type == R) {
             return (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode;
@@ -219,9 +224,13 @@ private:
             uint32_t imm_11 = (imm >> 11) & 0x1;
             uint32_t imm_10_5 = (imm >> 5) & 0x3f;
             uint32_t imm_4_1 = (imm >> 1) & 0xf;
-            return ((imm & 0x1E) << 25) | ((rs2 & 0x1f) << 20) | ((rs1 & 0x1f) << 15) | (funct3 << 12) | ((imm >> 5) & 0x7f) | opcode;
+            return (imm_12 << 31) | (imm_10_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_4_1 << 8) | (imm_11 << 7) | opcode;
         } else if (type == J) {
-            return ((imm & 0xfff00000) >> 12) | (rd << 7) | opcode;
+            uint32_t imm_20 = (imm >> 20) & 0x1;
+            uint32_t imm_10_1 = (imm >> 1) & 0x3ff;
+            uint32_t imm_11 = (imm >> 11) & 0x1;
+            uint32_t imm_19_12 = (imm >> 12) & 0xff;
+            return (imm_20 << 31) | (imm_10_1 << 21) | (imm_11 << 20) | (imm_19_12 << 12) | (rd << 7) | opcode;
         } else if (type == U_LUI || type == U_AUIPC) {
             return imm & 0xfffff000 | rd << 7 | opcode;
         } else if (type == SX_S || type == SX_I) {
@@ -229,16 +238,17 @@ private:
                 return (rs2 << 20) | (rs1 << 15) | (rd << 7) | opcode;
             } else if (type == SX_I) {
                 uint32_t imm_11_0 = (imm & 0xfff); 
-                return (imm_11_0 < 20) | (rs1 << 15) | (rd << 7) | opcode;
+                return (imm_11_0 << 20) | (rs1 << 15) | (rd << 7) | opcode;
             }
         } else if (type == HALT) {
             return 0; // representing halt as all 0's
         }
+        return 0; // default case
     }
 
     uint32_t assembleInstr(const std::string& mnemonic, const std::vector<std::string>& operands) {
 
-        // handle scalar instructions
+        // handle scalar prefix "s." and strip it
         bool scalar = false;
         std::string real_mnemonic = mnemonic;
         if (mnemonic.substr(0, 2) == "s.") {
@@ -247,26 +257,31 @@ private:
         } 
         if (instrs.find(real_mnemonic) == instrs.end()) throw std::runtime_error("Unknown instruction: " + real_mnemonic);
         const instrInfo& info = instrs[real_mnemonic];
-        if (!scalar) scalar = info.scalar; // if not vector turned into scalar, assign scalar value
+        // if not already marked scalar, check for vector-to-scalar "sx."
+        if (!scalar) scalar = info.scalar;
 
-        uint32_t rd, rs1, rs2;
-        int32_t imm;
+        uint32_t rd = 0, rs1 = 0, rs2 = 0;
+        int32_t imm = 0;
 
         // check for operand errors and handle parsing differently per instr
-        if (info.type == R || info.type == I_AR || info.type == SX_S || info.type == SX_I) { // SX. instrs are treated the same, will just always use s1 as rd
+        if (info.type == R || info.type == I_AR || info.type == SX_S || info.type == SX_I) { 
+            // SX. instrs are treated the same, will just always use s1 as rd
             if (operands.size() != 3) throw std::runtime_error("Requires 3 operands");
-            rd = parseRegs(operands[0]);
-            rs1 = parseRegs(operands[1]);
-            if (info.type == R) rs2 = parseRegs(operands[2]);
-            else imm = parseImm(operands[2]);
+            rd = parseRegs(operands[0]);   
+            rs1 = parseRegs(operands[1]);  
+            if (info.type == R) 
+                rs2 = parseRegs(operands[2]); // rs2 for R-type
+            else 
+                imm = parseImm(operands[2]); // imm for I-type and SX
         } else if (info.type == I_JALR || info.type == I_LD || info.type == S) {
             if (operands.size() != 2) throw std::runtime_error("Requires 2 operands with base + offset");
             rd = parseRegs(operands[0]);
+            // parse offset(base) using regex
             std::regex regex(R"((-?\d+|0x[0-9a-fA-F]+)\((\w+)\))");
             std::smatch match;
             if (std::regex_match(operands[1], match, regex)) {
-                rs1 = parseRegs(match[0].str());
-                imm = parseImm(match[1].str());
+                imm = parseImm(match[1].str()); // match[1] = offset (dec/hex)
+                rs1 = parseRegs(match[2].str()); // match[2] = base reg
             } else {
                 throw std::runtime_error("Does not match offset(base) syntax");
             }
@@ -274,18 +289,22 @@ private:
             if (operands.size() != 3) throw std::runtime_error("Requires 3 operands");
             rs1 = parseRegs(operands[0]);
             rs2 = parseRegs(operands[1]);
+            // labels take priority, ex: can't use imm "100" if label "100" exists
             if (labels.find(operands[2]) == labels.end()) {
-                // this check only works if: labels are not allowed to be named anything that could be mistaken for an imm (for which the programmer writes an intended imm that happens to correspond to a label of the same characters)
-                imm = parseImm(operands[2]); 
+                imm = parseImm(operands[2]); // direct imm offset
             } else {
-                imm = labels[operands[2]] - pc; // actual int types don't need parseImm
+                imm = labels[operands[2]] - pc; // PC-relative offset to label
             }
+        // Jump and upper immediate: rd, label/immediate
         } else if (info.type == J || info.type == U_LUI || info.type == U_AUIPC) {
             if (operands.size() != 2) throw std::runtime_error("Requires 2 operands");
             rd = parseRegs(operands[0]);
-            if (labels.find(operands[1]) == labels.end()) imm = parseImm(operands[1]); 
-            else imm = labels[operands[1]] - pc; 
-        } // no additional logic here needed for HALT
+            if (labels.find(operands[1]) == labels.end()) 
+                imm = parseImm(operands[1]); // direct imm offset
+            else 
+                imm = labels[operands[1]] - pc; // PC-relative offset to label
+        } 
+        // HALT has no operands to parse
 
         return encodeInstr(info.opcode, info.type, rd, rs1, rs2, imm, info.funct3, info.funct7, scalar);
     }
@@ -343,7 +362,7 @@ public:
         }
         out.close();
 
-        std::cout << "Assembled successfully " << machine_code.size() << "instructions" << std::endl;
+        std::cout << "Assembled successfully " << machine_code.size() << " instructions" << std::endl;
         return true;
 
     }
@@ -351,8 +370,10 @@ public:
 };
 
 int main(int argc, char* argv[]) {
-    if (argc != 3) std::cerr << "Usage: " << argv[0] << " <input.asm> <output.mem>" << std::endl; // argv[0] --> guaranteed to have program name
-    return 1;
+    if (argc != 3) {
+        std::cerr << "Usage: " << argv[0] << " <input.asm> <output.mem>" << std::endl;
+        return 1;
+    }
 
     littleGPUassembler assembler;
     bool success = assembler.assemble(argv[1], argv[2]);

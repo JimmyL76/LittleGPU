@@ -43,11 +43,11 @@ module scalar_regs #(
     input data_t alu_out, lsu_out, next_pc, v_to_s_value
     );
     
-    // designated registers for indexing, i = block id * block size + thread id
+    // designated registers for indexing
     localparam int ZERO_REG = 0;
     localparam int EXEC_MASK_REG = 1;
     
-    // each thread gets its own set of 32 registers (on top of potentially 32 threads per warp)
+    // each warp gets 32 scalar regs (shared across all threads in the warp)
     data_t [SCALAR_REGS_PER_WARP-1:0] registers;
     
     assign execution_mask = registers[EXEC_MASK_REG];
@@ -67,19 +67,16 @@ module scalar_regs #(
                 registers[r] <= 0; // init all with 0s
             registers[EXEC_MASK_REG] <= 1; // except execution mask which should be all 1s
         end else if (warp_enable) begin
-            // check warp state
-            if (warp_state == WARP_REQUEST) begin
-                // if vec/vec-to-scalar, don't need scalar regs
-                if (Scalar == 1) begin 
-                    rs1 <= registers[RS1Addr];  
-                    rs2 <= registers[RS2Addr]; 
-                end
-            end else if (warp_state == WARP_UPDATE) begin
+            // register read stage
+            if (warp_state == WARP_DECODE && (Scalar == 1)) begin
+                rs1 <= registers[RS1Addr];  
+                rs2 <= registers[RS2Addr];
+            end else if (warp_state == WARP_WRITEBACK) begin
                 // no update if read-only regs or vec only
                 if (LdReg && (RDAddr > 0) && Scalar) begin
                     registers[RDAddr] <= reg_load;
                 end
-            end 
+            end
         end
     end
         
