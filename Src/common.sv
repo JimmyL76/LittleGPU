@@ -77,7 +77,7 @@ package common_pkg;
         STALL_RSVD_4    = 3'd4   // reserved encoding for future barrier wait
     } stall_reason_t;
 
-    // latency-hiding resource parameters threaded into modules in later tasks
+    // latency-hiding resource parameters
     // all values are assumed to be at minimum >= 2 and stated inline at declaration
     parameter int SCOREBOARD_DEPTH = 2;        // concurrent outstanding warp memory ops default 2
     parameter int MSHR_COUNT       = 2;        // bounded mshr pool size default 2
@@ -88,6 +88,123 @@ package common_pkg;
     parameter int MAX_OUTSTANDING_PER_CORE = SCOREBOARD_DEPTH;  // core-internal max concurrent outstanding default 2
     // request tag width is clog2 of max outstanding giving 1 bit at default depth 2
     parameter int REQ_TAG_WIDTH = $clog2(MAX_OUTSTANDING_PER_CORE);
+
+    // function for making display statements easier to read
+    `ifndef SYNTHESIS
+    function automatic string decode_instr(instr_t instr);
+        logic [6:0] opcode = instr[6:0];
+        logic [4:0] rd = instr[11:7];
+        logic [2:0] funct3 = instr[14:12];
+        logic [4:0] rs1 = instr[19:15];
+        logic [4:0] rs2 = instr[24:20];
+        logic [6:0] funct7 = instr[31:25];
+        
+        if (instr == 32'h00000000) return "HALT";
+        if (instr == 32'h00000013) return "NOP";
+        
+        case (opcode)
+            7'h33: begin // R-type Vector
+                case (funct3)
+                    3'b000: if (funct7 == 0) return $sformatf("ADD_V x%0d, x%0d, x%0d", rd, rs1, rs2); else return $sformatf("SUB_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b001: return $sformatf("SLL_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b010: return $sformatf("SLT_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b011: return $sformatf("SLTU_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b100: return $sformatf("XOR_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b101: if (funct7 == 0) return $sformatf("SRL_V x%0d, x%0d, x%0d", rd, rs1, rs2); else return $sformatf("SRA_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b110: return $sformatf("OR_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b111: return $sformatf("AND_V x%0d, x%0d, x%0d", rd, rs1, rs2);
+                endcase
+            end
+            7'h73: begin // R-type Scalar
+                case (funct3)
+                    3'b000: if (funct7 == 0) return $sformatf("ADD_S x%0d, x%0d, x%0d", rd, rs1, rs2); else return $sformatf("SUB_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b001: return $sformatf("SLL_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b010: return $sformatf("SLT_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b011: return $sformatf("SLTU_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b100: return $sformatf("XOR_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b101: if (funct7 == 0) return $sformatf("SRL_S x%0d, x%0d, x%0d", rd, rs1, rs2); else return $sformatf("SRA_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b110: return $sformatf("OR_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                    3'b111: return $sformatf("AND_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+                endcase
+            end
+            7'h13: begin // I-type Vector
+                case (funct3)
+                    3'b000: return $sformatf("ADDI_V x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b010: return $sformatf("SLTI_V x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b011: return $sformatf("SLTIU_V x%0d, x%0d, %0d", rd, rs1, instr[31:20]);
+                    3'b100: return $sformatf("XORI_V x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b110: return $sformatf("ORI_V x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b111: return $sformatf("ANDI_V x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b001: return $sformatf("SLLI_V x%0d, x%0d, %0d", rd, rs1, rs2);
+                    3'b101: if (funct7 == 0) return $sformatf("SRLI_V x%0d, x%0d, %0d", rd, rs1, rs2); else return $sformatf("SRAI_V x%0d, x%0d, %0d", rd, rs1, rs2);
+                endcase
+            end
+            7'h53: begin // I-type Scalar
+                case (funct3)
+                    3'b000: return $sformatf("ADDI_S x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b010: return $sformatf("SLTI_S x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b011: return $sformatf("SLTIU_S x%0d, x%0d, %0d", rd, rs1, instr[31:20]);
+                    3'b100: return $sformatf("XORI_S x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b110: return $sformatf("ORI_S x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b111: return $sformatf("ANDI_S x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+                    3'b001: return $sformatf("SLLI_S x%0d, x%0d, %0d", rd, rs1, rs2);
+                    3'b101: if (funct7 == 0) return $sformatf("SRLI_S x%0d, x%0d, %0d", rd, rs1, rs2); else return $sformatf("SRAI_S x%0d, x%0d, %0d", rd, rs1, rs2);
+                endcase
+            end
+            7'h03: begin // Load Vector
+                case (funct3)
+                    3'b000: return $sformatf("LB_V x%0d, %0d(x%0d)", rd, $signed(instr[31:20]), rs1);
+                    3'b001: return $sformatf("LH_V x%0d, %0d(x%0d)", rd, $signed(instr[31:20]), rs1);
+                    3'b010: return $sformatf("LW_V x%0d, %0d(x%0d)", rd, $signed(instr[31:20]), rs1);
+                    3'b100: return $sformatf("LBU_V x%0d, %0d(x%0d)", rd, instr[31:20], rs1);
+                    3'b101: return $sformatf("LHU_V x%0d, %0d(x%0d)", rd, instr[31:20], rs1);
+                endcase
+            end
+            7'h43: begin // Load Scalar
+                case (funct3)
+                    3'b000: return $sformatf("LB_S x%0d, %0d(x%0d)", rd, $signed(instr[31:20]), rs1);
+                    3'b001: return $sformatf("LH_S x%0d, %0d(x%0d)", rd, $signed(instr[31:20]), rs1);
+                    3'b010: return $sformatf("LW_S x%0d, %0d(x%0d)", rd, $signed(instr[31:20]), rs1);
+                    3'b100: return $sformatf("LBU_S x%0d, %0d(x%0d)", rd, instr[31:20], rs1);
+                    3'b101: return $sformatf("LHU_S x%0d, %0d(x%0d)", rd, instr[31:20], rs1);
+                endcase
+            end
+            7'h23: begin // Store Vector
+                case (funct3)
+                    3'b000: return $sformatf("SB_V x%0d, %0d(x%0d)", rs2, $signed({funct7, rd}), rs1);
+                    3'b001: return $sformatf("SH_V x%0d, %0d(x%0d)", rs2, $signed({funct7, rd}), rs1);
+                    3'b010: return $sformatf("SW_V x%0d, %0d(x%0d)", rs2, $signed({funct7, rd}), rs1);
+                endcase
+            end
+            7'h7B: begin // Store Scalar
+                case (funct3)
+                    3'b000: return $sformatf("SB_S x%0d, %0d(x%0d)", rs2, $signed({funct7, rd}), rs1);
+                    3'b001: return $sformatf("SH_S x%0d, %0d(x%0d)", rs2, $signed({funct7, rd}), rs1);
+                    3'b010: return $sformatf("SW_S x%0d, %0d(x%0d)", rs2, $signed({funct7, rd}), rs1);
+                endcase
+            end
+            7'h63: begin // Branch
+                case (funct3)
+                    3'b000: return $sformatf("BEQ x%0d, x%0d, %0d", rs1, rs2, $signed({instr[31], instr[7], instr[30:25], instr[11:8], 1'b0}));
+                    3'b001: return $sformatf("BNE x%0d, x%0d, %0d", rs1, rs2, $signed({instr[31], instr[7], instr[30:25], instr[11:8], 1'b0}));
+                    3'b100: return $sformatf("BLT x%0d, x%0d, %0d", rs1, rs2, $signed({instr[31], instr[7], instr[30:25], instr[11:8], 1'b0}));
+                    3'b101: return $sformatf("BGE x%0d, x%0d, %0d", rs1, rs2, $signed({instr[31], instr[7], instr[30:25], instr[11:8], 1'b0}));
+                    3'b110: return $sformatf("BLTU x%0d, x%0d, %0d", rs1, rs2, $signed({instr[31], instr[7], instr[30:25], instr[11:8], 1'b0}));
+                    3'b111: return $sformatf("BGEU x%0d, x%0d, %0d", rs1, rs2, $signed({instr[31], instr[7], instr[30:25], instr[11:8], 1'b0}));
+                endcase
+            end
+            7'h6F: return $sformatf("JAL x%0d, %0d", rd, $signed({instr[31], instr[19:12], instr[20], instr[30:21], 1'b0}));
+            7'h67: return $sformatf("JALR x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+            7'h37: return $sformatf("LUI_V x%0d, 0x%0x", rd, {instr[31:12], 12'b0});
+            7'h77: return $sformatf("LUI_S x%0d, 0x%0x", rd, {instr[31:12], 12'b0});
+            7'h17: return $sformatf("AUIPC_V x%0d, 0x%0x", rd, {instr[31:12], 12'b0});
+            7'h57: return $sformatf("AUIPC_S x%0d, 0x%0x", rd, {instr[31:12], 12'b0});
+            7'h7E: return $sformatf("SX_S x%0d, x%0d, x%0d", rd, rs1, rs2);
+            7'h7D: return $sformatf("SX_I x%0d, x%0d, %0d", rd, rs1, $signed(instr[31:20]));
+        endcase
+        return $sformatf("UNKNOWN_INSTR (0x%0x)", instr);
+    endfunction
+    `endif
 
  endpackage
  

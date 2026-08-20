@@ -48,6 +48,7 @@ module tb_fetcher;
         .reset(reset),
         .warp_state(warp_state),
         .pc(pc),
+        .mem_ready(1'b1), // always ready for tb
         .mem_valid(mem_valid),
         .mem_addr(mem_addr),
         .mem_resp_valid(mem_resp_valid),
@@ -133,10 +134,11 @@ module tb_fetcher;
         
         // Trigger fetch by setting warp_state to WARP_FETCH
         warp_state = WARP_FETCH;
+        #1;
+        compare_bit("Fetch_MemValid_High", mem_valid, 1'b1, "valid");
         @(posedge clk); #1;
         compare_bit("Fetch_State_FETCHING", fetcher_state, FETCHER_FETCHING, "fetching");
         compare_bit_simple(1'b0, done, "Fetch_Done_Low");
-        compare_bit("Fetch_MemValid_High", mem_valid, 1'b1, "valid");
         compare_data("Fetch_MemAddr", mem_addr, 32'h00000000);
         
         // Wait for memory response (2-cycle pipeline in memory model)
@@ -198,10 +200,11 @@ module tb_fetcher;
         compare_bit_simple(1'b0, done, "SM_IDLE_Done_Low");
         
         warp_state = WARP_FETCH;
+        #1;
+        compare_bit("SM_MemValid_Asserted", mem_valid, 1'b1, "valid");
         @(posedge clk); #1;  // Cycle 1: IDLE → FETCHING
         compare_bit("SM_State_FETCHING", fetcher_state, FETCHER_FETCHING, "fetching");
         compare_bit_simple(1'b0, done, "SM_FETCHING_Done_Low");
-        compare_bit("SM_MemValid_Asserted", mem_valid, 1'b1, "valid");
         
         // Test FETCHING → IDLE transition (when mem_resp_valid)
         @(posedge clk); #1;  // Cycle 2: Memory pipeline stage 1
@@ -304,14 +307,12 @@ module tb_fetcher;
         #1;  // Wait for NBA - fetcher transitions to IDLE
         
         // Start next fetch on the next clock edge
-        @(posedge clk);  // Cycle 4: Fetcher is now in IDLE
+        @(posedge clk); #1; // Cycle 4: Fetcher is now in IDLE
         pc = 32'h00000001;
         warp_state = WARP_FETCH;
         
         @(posedge clk); #1;  // Cycle 1: IDLE → FETCHING
-        @(posedge clk); #1;  // Cycle 2: Memory pipeline stage 1
-        
-        @(posedge clk);  // Cycle 3: Memory pipeline stage 2, done pulses
+        @(posedge clk); #1;  // Cycle 2: Memory response, done pulses
         compare_data("BackToBack_Fetch2", out_instr, 32'hABCDEF00);
         compare_bit_simple(1'b1, done, "BackToBack_Done2");
         
@@ -332,9 +333,10 @@ module tb_fetcher;
         @(posedge clk); #1;
         
         warp_state = WARP_FETCH;
+        #1;
+        compare_bit("Reset_Before_MemValid", mem_valid, 1'b1, "valid");
         @(posedge clk); #1;  // Cycle 1: IDLE → FETCHING
         compare_bit("Reset_Before_State", fetcher_state, FETCHER_FETCHING, "fetching");
-        compare_bit("Reset_Before_MemValid", mem_valid, 1'b1, "valid");
         
         // Assert reset during fetch
         reset = 0;
@@ -447,8 +449,9 @@ module tb_fetcher;
         compare_bit("Edge_MemValid_IDLE", mem_valid, 1'b0, "not valid");
         
         warp_state = WARP_FETCH;
-        @(posedge clk); #1;  // Cycle 1: IDLE → FETCHING
+        #1;
         compare_bit("Edge_MemValid_FETCHING", mem_valid, 1'b1, "valid");
+        @(posedge clk); #1;  // Cycle 1: IDLE → FETCHING
         
         @(posedge clk); #1;  // Cycle 2: Memory pipeline stage 1
         

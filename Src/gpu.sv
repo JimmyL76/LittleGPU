@@ -79,12 +79,8 @@ module gpu #(
     
     // core dispatcher signals
     logic [NUM_CORES-1:0] core_done;
-    logic [NUM_CORES-1:0] cores_in_use, past_cores_in_use, core_start; 
-    always_ff @(posedge clk or negedge reset) begin 
-        if (!reset) begin end
-        else past_cores_in_use <= cores_in_use;
-    end
-    assign core_start = ((~past_cores_in_use) & cores_in_use); // for one cycle start to core
+    logic [NUM_CORES-1:0] cores_in_use; // status mask for debug, tied only to values in tb
+    logic [NUM_CORES-1:0] core_start; 
     data_t core_block_id [NUM_CORES];
              
     // fetcher signals
@@ -96,15 +92,17 @@ module gpu #(
     logic [NUM_FETCHERS-1:0] fetcher_mem_resp_valid;
     logic [NUM_FETCHERS-1:0] fetcher_mem_resp_ready;
     instr_t fetcher_mem_resp_data [NUM_FETCHERS];
-    // instr fetch is read-only, drive zero we/data to controller, leave its outputs in unused nets
+    // instr fetch is read-only, drive zero we/data/tag to controller, leave its outputs in unused nets
     logic [(INSTR_WIDTH/8)-1:0] fetcher_mem_we [NUM_FETCHERS];
     instr_t fetcher_mem_data [NUM_FETCHERS];
+    logic [REQ_TAG_WIDTH-1:0] fetcher_mem_tag [NUM_FETCHERS];
     logic [(INSTR_WIDTH/8)-1:0] instr_mem_we_unused [NUM_INSTR_CHANNELS];
     instr_t instr_mem_data_unused [NUM_INSTR_CHANNELS];
     always_comb begin
         for (int i = 0; i < NUM_FETCHERS; i++) begin
             fetcher_mem_we[i]   = '0;
             fetcher_mem_data[i] = '0;
+            fetcher_mem_tag[i]  = '0;
         end
     end
     
@@ -121,12 +119,20 @@ module gpu #(
     // coalesced signals - 2 user ports per core (1 vector + 1 scalar), line-wide
     localparam int NUM_DATA_USERS = NUM_CORES * 2;
     logic [NUM_DATA_USERS-1:0] coal_mem_valid;
+    logic [NUM_DATA_USERS-1:0] coal_mem_ready; // controller acceptance per user
     data_mem_addr_t coal_mem_addr [NUM_DATA_USERS]; // always just one base addr
     logic [LINE_BITS-1:0] coal_mem_data [NUM_DATA_USERS];
     logic [MEM_LINE_BYTES-1:0] coal_mem_we [NUM_DATA_USERS];
+    logic [REQ_TAG_WIDTH-1:0] coal_mem_tag [NUM_DATA_USERS]; // request tag per user
     logic [NUM_DATA_USERS-1:0] coal_mem_resp_valid;
     logic [NUM_DATA_USERS-1:0] coal_mem_resp_ready;
     logic [LINE_BITS-1:0] coal_mem_resp_data [NUM_DATA_USERS];
+    logic [REQ_TAG_WIDTH-1:0] coal_mem_resp_tag [NUM_DATA_USERS]; // echoed response tag
+
+    // per-core coalescer round-tag handshake (vec/scalar), see core.sv header
+    logic [REQ_TAG_WIDTH-1:0] core_issue_round_tag_vec [NUM_CORES], core_issue_round_tag_scl [NUM_CORES];
+    logic [NUM_CORES-1:0] core_round_start_vec, core_round_start_scl;
+    logic [REQ_TAG_WIDTH-1:0] core_resp_round_tag_vec [NUM_CORES], core_resp_round_tag_scl [NUM_CORES];
     
     dispatcher #(
         .NUM_CORES(NUM_CORES)
@@ -136,6 +142,7 @@ module gpu #(
         // core states
         .core_done(core_done), 
         .cores_in_use(cores_in_use), 
+        .core_start(core_start),
         .core_block_id(core_block_id), // each core gets its own block id
         // kernel execution
         .finished(kernel_done)
@@ -156,6 +163,7 @@ module gpu #(
         .req_we(fetcher_mem_we),
         .req_addr(fetcher_mem_addr),
         .req_data(fetcher_mem_data),
+        .req_tag(fetcher_mem_tag),
         
         .req_resp_valid(fetcher_mem_resp_valid), // tells user when mem access is done
         .req_resp_ready(fetcher_mem_resp_ready),
@@ -182,15 +190,17 @@ module gpu #(
     ) data_mem_controller(
         .clk(clk), .reset(reset),
         // user requests interface, used by coalescers (vec/scalar per core)
-        .req_ready(), // unconnected - coalescer doesn't backpressure on it
+        .req_ready(coal_mem_ready),
         .req_valid(coal_mem_valid),
         .req_we(coal_mem_we),
         .req_addr(coal_mem_addr),
         .req_data(coal_mem_data),
+        .req_tag(coal_mem_tag),
         
         .req_resp_valid(coal_mem_resp_valid), // tells user when mem access is done
         .req_resp_ready(coal_mem_resp_ready),
         .req_resp_data(coal_mem_resp_data),
+        .req_resp_tag(coal_mem_resp_tag),
         // mem interface
         .mem_ready(data_mem_ready), // mem tells controller channel is ready for usage
         .mem_valid(data_mem_valid),
@@ -225,14 +235,21 @@ module gpu #(
                 .lsu_resp_valid(lsu_mem_resp_valid[lsu_index +: THREADS_PER_WARP]),
                 .lsu_resp_ready(lsu_mem_resp_ready[lsu_index +: THREADS_PER_WARP]),
                 .lsu_resp_data(lsu_mem_resp_data[lsu_index +: THREADS_PER_WARP]),
+                // round-tag handshake with core's scoreboard
+                .issue_round_tag(core_issue_round_tag_vec[c]),
+                .resp_round_tag(core_resp_round_tag_vec[c]),
+                .round_start(core_round_start_vec[c]),
                 
                 .mem_valid(coal_mem_valid[vec_user]),
+                .mem_ready(coal_mem_ready[vec_user]),
                 .mem_addr(coal_mem_addr[vec_user]),
                 .mem_data(coal_mem_data[vec_user]),
                 .mem_we(coal_mem_we[vec_user]),
+                .mem_tag(coal_mem_tag[vec_user]),
                 .mem_resp_valid(coal_mem_resp_valid[vec_user]),
                 .mem_resp_ready(coal_mem_resp_ready[vec_user]),
-                .mem_resp_data(coal_mem_resp_data[vec_user])
+                .mem_resp_data(coal_mem_resp_data[vec_user]),
+                .mem_resp_tag(coal_mem_resp_tag[vec_user])
             );
             
             // scalar coalescer - +1 lsu per core, just one word to one line
@@ -265,14 +282,21 @@ module gpu #(
                 .lsu_resp_valid(scl_lsu_resp_valid_arr),
                 .lsu_resp_ready(scl_lsu_resp_ready_arr),
                 .lsu_resp_data(scl_lsu_resp_data_arr),
+                // round-tag handshake with core's scoreboard
+                .issue_round_tag(core_issue_round_tag_scl[c]),
+                .resp_round_tag(core_resp_round_tag_scl[c]),
+                .round_start(core_round_start_scl[c]),
                 
                 .mem_valid(coal_mem_valid[scl_user]),
+                .mem_ready(coal_mem_ready[scl_user]),
                 .mem_addr(coal_mem_addr[scl_user]),
                 .mem_data(coal_mem_data[scl_user]),
                 .mem_we(coal_mem_we[scl_user]),
+                .mem_tag(coal_mem_tag[scl_user]),
                 .mem_resp_valid(coal_mem_resp_valid[scl_user]),
                 .mem_resp_ready(coal_mem_resp_ready[scl_user]),
-                .mem_resp_data(coal_mem_resp_data[scl_user])
+                .mem_resp_data(coal_mem_resp_data[scl_user]),
+                .mem_resp_tag(coal_mem_resp_tag[scl_user])
             );
             
             core #(
@@ -281,13 +305,14 @@ module gpu #(
             ) core_inst(
                 .clk(clk), .reset(reset),
                 // core info
-                .core_start(core_start[c]), // one cycle only
-                .core_done(core_done[c]),
+                .start(core_start[c]), // one cycle only
+                .done(core_done[c]),
                 .kernel_config(kernel_config_reg),
                 .core_id(c), .core_block_id(core_block_id[c]), 
                 // instr mem - one per warp
                 .instr_mem_valid(fetcher_mem_valid[fetcher_index +: WARPS_PER_CORE]),
                 .instr_mem_addr(fetcher_mem_addr[fetcher_index +: WARPS_PER_CORE]),
+                .instr_mem_ready(fetcher_mem_ready[fetcher_index +: WARPS_PER_CORE]),
                 .instr_mem_resp_valid(fetcher_mem_resp_valid[fetcher_index +: WARPS_PER_CORE]),
                 .instr_mem_resp_ready(fetcher_mem_resp_ready[fetcher_index +: WARPS_PER_CORE]),
                 .instr_mem_resp_data(fetcher_mem_resp_data[fetcher_index +: WARPS_PER_CORE]),
@@ -299,7 +324,14 @@ module gpu #(
                 .data_mem_we(lsu_mem_we[lsu_index +: (THREADS_PER_WARP+1)]),
                 .data_mem_resp_valid(lsu_mem_resp_valid[lsu_index +: (THREADS_PER_WARP+1)]),
                 .data_mem_resp_ready(lsu_mem_resp_ready[lsu_index +: (THREADS_PER_WARP+1)]),
-                .data_mem_resp_data(lsu_mem_resp_data[lsu_index +: (THREADS_PER_WARP+1)])
+                .data_mem_resp_data(lsu_mem_resp_data[lsu_index +: (THREADS_PER_WARP+1)]),
+                // multi-round coalescer round-tag handshake
+                .data_mem_issue_round_tag_vec(core_issue_round_tag_vec[c]),
+                .data_mem_round_start_vec(core_round_start_vec[c]),
+                .data_mem_resp_round_tag_vec(core_resp_round_tag_vec[c]),
+                .data_mem_issue_round_tag_scl(core_issue_round_tag_scl[c]),
+                .data_mem_round_start_scl(core_round_start_scl[c]),
+                .data_mem_resp_round_tag_scl(core_resp_round_tag_scl[c])
             );
         end
     endgenerate

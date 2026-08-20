@@ -29,8 +29,9 @@ module dispatcher #(
     input kernel_config_t kernel_config,
     // core states
     input logic [NUM_CORES-1:0] core_done,
-    output logic [NUM_CORES-1:0] cores_in_use, 
-    output data_t [NUM_CORES-1:0] core_block_id, // each core gets its own block id
+    output logic [NUM_CORES-1:0] cores_in_use, // status mask for debug: 1 = core executing a block
+    output logic [NUM_CORES-1:0] core_start,
+    output data_t core_block_id [NUM_CORES], // each core gets its own block id
     // kernel execution
     output logic finished
     );
@@ -41,8 +42,9 @@ module dispatcher #(
     logic [NUM_CORES-1:0] cores_just_finished;
     always_comb begin
         next_blocks_finished = blocks_finished;
+        cores_just_finished = '0;
         for (int i = 0; i < NUM_CORES; i++)
-            if (core_done[i] && cores_in_use[i]) begin 
+            if (core_done[i] && cores_in_use[i] && !core_start[i]) begin 
                 cores_just_finished[i] = 1; // set bit
                 next_blocks_finished++; // +1 to blocks finished
             end
@@ -53,7 +55,7 @@ module dispatcher #(
     assign blocks_left = kernel_config.num_blocks - blocks_dispatched;
     // since we assign blocks in ascending order, the block_id_used is just based on blocks_dispatched
     // this means we assume for simplicity there is no block priority
-    data_t [0:3] block_id_used;
+    data_t block_id_used [4];
     always_comb begin
         for (int i = 0; i < 4; i++)
             block_id_used[i] = blocks_dispatched + i;
@@ -63,85 +65,75 @@ module dispatcher #(
     // to calculate the nth core that is free, use bits and bit masking
     // (~i) & (i + 1) gives the lowest cleared bit ; i = 0101, ~i = 1010, ~i+1 = 1011, i+1 = 0110
     // uses [NUM_CORES-1:0] instead of data_t since # of cores could be not 32
-    logic [NUM_CORES-1:0][0:3] nth_free_core;
-    logic [NUM_CORES-1:0][0:3] nth_cores_in_use;
-    logic [$clog2(NUM_CORES)-1:0][0:3] core_id_used;
+    logic [NUM_CORES-1:0] nth_free_core [4];
+    logic [$clog2(NUM_CORES)-1:0] core_id_used [4];
+    logic [NUM_CORES-1:0] current_occupied_cores;
+    assign current_occupied_cores = (cores_in_use | core_start) & ~cores_just_finished;
+
+    logic [NUM_CORES-1:0] free_pool [4];
     always_comb begin
-        nth_free_core[0] = ~cores_in_use & (cores_in_use + 1);
-        // for nth cores in use, OR previous result to set nth_free_core[0] bit
-        nth_cores_in_use[1] = (cores_in_use | nth_free_core[0]);
+        free_pool[0] = ~current_occupied_cores;
+        nth_free_core[0] = free_pool[0] & (~free_pool[0] + 1'b1);
         for (int i = 1; i < 4; i++) begin
-            nth_free_core[i] = ~cores_in_use  & (nth_cores_in_use[i] + 1);
-            // for rest, continue using setting nth_free_core[i] bit to ignore already claimed bits
-            if (i != 3)
-                nth_cores_in_use[i+1] = (nth_cores_in_use[i] | nth_free_core[i]);
+            free_pool[i] = free_pool[i-1] & ~nth_free_core[i-1];
+            nth_free_core[i] = free_pool[i] & (~free_pool[i] + 1'b1);
         end
     end
-            
+    
     // convert nth_free_cores to core_id 
     genvar j;
     generate 
         for (j = 0; j < 4; j++) begin : onehot_to_binary_func
             utility #(NUM_CORES) util_inst(nth_free_core[j], core_id_used[j]);
-        end  
+        end
     endgenerate
     
-    logic [NUM_CORES-1:0] next_cores_in_use, next_blocks_dispatched;
-    data_t [NUM_CORES-1:0] next_core_block_id;
+    data_t next_blocks_dispatched;
+    data_t next_core_block_id [NUM_CORES];
+    logic [NUM_CORES-1:0] newly_dispatched_cores;
     always_comb begin
-        next_blocks_dispatched = blocks_dispatched; next_cores_in_use = cores_in_use;
+        next_blocks_dispatched = blocks_dispatched; 
         next_core_block_id = core_block_id;
+        newly_dispatched_cores = '0;
         for (int i = 0; i < 4; i++) begin
-            if (blocks_left > i) begin
+            if ((blocks_left > i) && (|nth_free_core[i])) begin
                 next_core_block_id[core_id_used[i]] = block_id_used[i];
-                $display("Dispatcher: Dispatching block %d to core %d", block_id_used[i], core_id_used[i]);
+                newly_dispatched_cores |= nth_free_core[i];
+                next_blocks_dispatched++;
             end 
         end
-        case (blocks_left)
-            0: begin // do nothing on zero
-            end
-            1: begin
-                next_cores_in_use |= nth_free_core[0];
-                next_blocks_dispatched = blocks_dispatched + 1;
-            end
-            2: begin
-                next_cores_in_use |= (nth_free_core[0] | nth_free_core[1]);
-                next_blocks_dispatched = blocks_dispatched + 2;       
-            end
-            3: begin
-                next_cores_in_use |= (nth_free_core[0] | nth_free_core[1] | nth_free_core[2]);
-                next_blocks_dispatched = blocks_dispatched + 3;       
-            end
-            default: begin // 4 or more
-                next_cores_in_use |= (nth_free_core[0] | nth_free_core[1] | nth_free_core[2] | nth_free_core[3]);
-                next_blocks_dispatched = blocks_dispatched + 4;       
-            end
-        endcase
     end
     
+    logic running;
     always_ff @(posedge clk or negedge reset) begin
         if (!reset) begin 
             finished <= 0;
+            running <= 0;
             blocks_dispatched <= 0;
             blocks_finished <= 0;
             cores_in_use <= 0;
+            core_start <= '0;
             for (int i = 0; i < NUM_CORES; i++)
                 core_block_id[i] <= 0;
-        end else if (start && (!finished)) begin                
-            // dispatch blocks to free cores if available
-            cores_in_use <= next_cores_in_use & (~cores_just_finished); // cores that just finished are set to 0
+        end else if ((start || running) && !finished) begin
+            running <= 1;
+            cores_in_use <= (cores_in_use & ~cores_just_finished) | newly_dispatched_cores;
             blocks_dispatched <= next_blocks_dispatched;
-            core_block_id <= next_core_block_id;            
-        
-            // check if finished
+            core_block_id <= next_core_block_id;
             blocks_finished <= next_blocks_finished;
+            core_start <= '0;
+            for (int i = 0; i < 4; i++) begin
+                if ((blocks_left > i) && (|nth_free_core[i])) begin
+                    core_start[core_id_used[i]] <= 1;
+                    $display("Dispatcher: Dispatching block %d to core %d", block_id_used[i], core_id_used[i]);
+                end
+            end
             if (next_blocks_finished == kernel_config.num_blocks) begin
                 $display("Dispatcher: Finished execution");
                 finished <= 1;
+                running <= 0;
             end
-            
         end
-    
     end
     
 endmodule

@@ -84,15 +84,22 @@ module regs #(
                 registers[t][BLOCK_ID_REG] <= block_id;
                 registers[t][BLOCK_SIZE_REG] <= block_size;
                 
-                // check execution mask and warp state
-                if (execution_mask[t]) begin
-                    if (warp_state == WARP_DECODE) begin
-                        // register read stage - if fully scalar, don't need vec regs
-                        if (Scalar != 1) begin 
-                            rs1[t] <= registers[t][RS1Addr];  
-                            rs2[t] <= registers[t][RS2Addr]; 
-                        end
-                    end else if (warp_state == WARP_WRITEBACK) begin
+                if (warp_state == WARP_DECODE) begin
+                    // register read stage - if fully scalar, don't need vec regs
+                    if (Scalar != 1) begin 
+                        rs1[t] <= (RS1Addr == ZERO_REG) ? 32'd0 :
+                                  (RS1Addr == THREAD_ID_REG) ? thread_ids[t] :
+                                  (RS1Addr == BLOCK_ID_REG) ? block_id :
+                                  (RS1Addr == BLOCK_SIZE_REG) ? block_size :
+                                  registers[t][RS1Addr];  
+                        rs2[t] <= (RS2Addr == ZERO_REG) ? 32'd0 :
+                                  (RS2Addr == THREAD_ID_REG) ? thread_ids[t] :
+                                  (RS2Addr == BLOCK_ID_REG) ? block_id :
+                                  (RS2Addr == BLOCK_SIZE_REG) ? block_size :
+                                  registers[t][RS2Addr]; 
+                    end
+                end else if (warp_state == WARP_WRITEBACK) begin
+                    if (execution_mask[t]) begin
                         // no update if read-only regs or scalar/vec-to-scalar
                         if (LdReg && (RDAddr > 3) && (!Scalar)) begin 
                             registers[t][RDAddr] <= reg_load[t];

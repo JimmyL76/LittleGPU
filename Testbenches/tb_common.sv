@@ -100,6 +100,19 @@ package tb_common_pkg;
         $display("========================================");
     endtask
     
+    // Watchdog timeout task
+    task automatic watchdog(
+        input string module_name,
+        input int timeout_time = 100000
+    );
+        #timeout_time;
+        test_count++;
+        fail_count++;
+        $display("\n[FATAL] Watchdog timeout in %s: simulation stalled", module_name);
+        report_summary();
+        $fatal(1, "watchdog timeout");
+    endtask
+    
     // Reset test counters (useful for running multiple test suites)
     task automatic reset_counters();
         test_count = 0;
@@ -107,7 +120,7 @@ package tb_common_pkg;
         fail_count = 0;
     endtask
 
-    // generic named boolean check shared across property/unit testbenches
+    // generic named boolean check shared across testbenches
     // replaces one-off chk/check/record style tasks duplicated per harness
     // label identifies harness/config eg "P15_PROD"  name identifies the check
     task automatic check_true(input string label, input string name, input bit cond);
@@ -146,6 +159,215 @@ package tb_common_pkg;
         MEM_DRIVEN = 2'd2
     } mem_mode_t;
 
+    // Instruction encoding helper
+    function automatic logic [31:0] encode_instr(
+        input string instr_type,
+        input logic [4:0] rd = 0,
+        input logic [4:0] rs1 = 0,
+        input logic [4:0] rs2 = 0,
+        input logic [31:0] imm = 0
+    );
+        logic [6:0] opcode;
+        logic [2:0] funct3 = 0; 
+        logic [6:0] funct7 = 0; 
+        
+        case (instr_type)
+            "NOP": return 32'h00000013;
+            "HALT": return 32'h00000000;
+            
+            // R-Type
+            "ADD", "ADD_V", "ADD_S": begin
+                opcode = (instr_type == "ADD_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b000; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SUB", "SUB_V", "SUB_S": begin
+                opcode = (instr_type == "SUB_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b000; funct7 = 7'b0100000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SLL", "SLL_V", "SLL_S": begin
+                opcode = (instr_type == "SLL_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b001; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SLT", "SLT_V", "SLT_S": begin
+                opcode = (instr_type == "SLT_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b010; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SLTU", "SLTU_V", "SLTU_S": begin
+                opcode = (instr_type == "SLTU_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b011; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "XOR", "XOR_V", "XOR_S": begin
+                opcode = (instr_type == "XOR_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b100; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SRL", "SRL_V", "SRL_S": begin
+                opcode = (instr_type == "SRL_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b101; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SRA", "SRA_V", "SRA_S": begin
+                opcode = (instr_type == "SRA_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b101; funct7 = 7'b0100000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "OR", "OR_V", "OR_S": begin
+                opcode = (instr_type == "OR_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b110; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "AND", "AND_V", "AND_S": begin
+                opcode = (instr_type == "AND_S") ? 7'h73 : 7'h33;
+                funct3 = 3'b111; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            
+            // I-Type
+            "ADDI", "ADDI_V", "ADDI_S": begin
+                opcode = (instr_type == "ADDI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b000;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "SLTI", "SLTI_V", "SLTI_S": begin
+                opcode = (instr_type == "SLTI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b010;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "SLTIU", "SLTIU_V", "SLTIU_S": begin
+                opcode = (instr_type == "SLTIU_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b011;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "XORI", "XORI_V", "XORI_S": begin
+                opcode = (instr_type == "XORI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b100;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "ORI", "ORI_V", "ORI_S": begin
+                opcode = (instr_type == "ORI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b110;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "ANDI", "ANDI_V", "ANDI_S": begin
+                opcode = (instr_type == "ANDI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b111;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "SLLI", "SLLI_V", "SLLI_S": begin
+                opcode = (instr_type == "SLLI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b001; funct7 = 7'b0000000;
+                return {funct7, imm[4:0], rs1, funct3, rd, opcode};
+            end
+            "SRLI", "SRLI_V", "SRLI_S": begin
+                opcode = (instr_type == "SRLI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b101; funct7 = 7'b0000000;
+                return {funct7, imm[4:0], rs1, funct3, rd, opcode};
+            end
+            "SRAI", "SRAI_V", "SRAI_S": begin
+                opcode = (instr_type == "SRAI_S") ? 7'h53 : 7'h13;
+                funct3 = 3'b101; funct7 = 7'b0100000;
+                return {funct7, imm[4:0], rs1, funct3, rd, opcode};
+            end
+            
+            // Load / Store
+            "LW", "LW_V", "LW_S": begin
+                opcode = (instr_type == "LW_S") ? 7'h43 : 7'h03;
+                funct3 = 3'b010;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "LH", "LH_V", "LH_S": begin
+                opcode = (instr_type == "LH_S") ? 7'h43 : 7'h03;
+                funct3 = 3'b001;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "LHU", "LHU_V", "LHU_S": begin
+                opcode = (instr_type == "LHU_S") ? 7'h43 : 7'h03;
+                funct3 = 3'b101;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "LB", "LB_V", "LB_S": begin
+                opcode = (instr_type == "LB_S") ? 7'h43 : 7'h03;
+                funct3 = 3'b000;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "LBU", "LBU_V", "LBU_S": begin
+                opcode = (instr_type == "LBU_S") ? 7'h43 : 7'h03;
+                funct3 = 3'b100;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            "SW", "SW_V", "SW_S": begin
+                opcode = (instr_type == "SW_S") ? 7'h7B : 7'h23; // scalar store avoids 0x63 branch conflict
+                funct3 = 3'b010;
+                return {imm[11:5], rs2, rs1, funct3, imm[4:0], opcode};
+            end
+            "SH", "SH_V", "SH_S": begin
+                opcode = (instr_type == "SH_S") ? 7'h7B : 7'h23;
+                funct3 = 3'b001;
+                return {imm[11:5], rs2, rs1, funct3, imm[4:0], opcode};
+            end
+            "SB", "SB_V", "SB_S": begin
+                opcode = (instr_type == "SB_S") ? 7'h7B : 7'h23;
+                funct3 = 3'b000;
+                return {imm[11:5], rs2, rs1, funct3, imm[4:0], opcode};
+            end
+            
+            // Branch
+            "BEQ", "BNE", "BLT", "BGE", "BLTU", "BGEU": begin
+                opcode = 7'h63; // B-type (always scalar control flow)
+                if (instr_type == "BEQ") funct3 = 3'b000;
+                else if (instr_type == "BNE") funct3 = 3'b001;
+                else if (instr_type == "BLT") funct3 = 3'b100;
+                else if (instr_type == "BGE") funct3 = 3'b101;
+                else if (instr_type == "BLTU") funct3 = 3'b110;
+                else funct3 = 3'b111;
+                return {imm[12], imm[10:5], rs2, rs1, funct3, imm[4:1], imm[11], opcode};
+            end
+            
+            // Jump
+            "JAL": begin
+                opcode = 7'h6F;
+                return {imm[20], imm[10:1], imm[11], imm[19:12], rd, opcode};
+            end
+            "JALR": begin
+                opcode = 7'h67;
+                funct3 = 3'b000;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+            
+            // Upper Immediates
+            "LUI", "LUI_V", "LUI_S": begin
+                opcode = (instr_type == "LUI_S") ? 7'h77 : 7'h37;
+                return {imm[31:12], rd, opcode};
+            end
+            "AUIPC", "AUIPC_V", "AUIPC_S": begin
+                opcode = (instr_type == "AUIPC_S") ? 7'h57 : 7'h17;
+                return {imm[31:12], rd, opcode};
+            end
+            
+            // Custom instructions
+            "SX_S": begin
+                opcode = 7'h7E;
+                funct3 = 3'b010; funct7 = 7'b0000000;
+                return {funct7, rs2, rs1, funct3, rd, opcode};
+            end
+            "SX_I": begin
+                opcode = 7'h7D;
+                funct3 = 3'b010;
+                return {imm[11:0], rs1, funct3, rd, opcode};
+            end
+
+            default: begin
+                $display("ERROR: Unknown instr_type %s", instr_type);
+                return 32'h0;
+            end
+        endcase
+    endfunction
+
 endpackage
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -162,19 +384,22 @@ endpackage
 module memory_model #(
     parameter int ADDR_WIDTH = 32,
     parameter int DATA_WIDTH = 32,
-    parameter int MEM_SIZE = 1024  // Size in words
+    parameter int MEM_SIZE   = 1024,
+    parameter int TAG_WIDTH  = 1
 )(
-    input logic clk,
-    input logic reset,
+    input  logic                    clk,
+    input  logic                    reset,
     // Memory interface
-    input logic valid,
-    input logic [ADDR_WIDTH-1:0] addr,
-    input logic [DATA_WIDTH-1:0] wdata,
-    input logic [(DATA_WIDTH/8)-1:0] we,  // Write enable (byte-level, sized to data width)
-    output logic ready,
-    output logic resp_valid,
-    input logic resp_ready,                // Receiver tells model it can accept response
-    output logic [DATA_WIDTH-1:0] rdata
+    input  logic                    valid,
+    input  logic [ADDR_WIDTH-1:0]   addr,
+    input  logic [DATA_WIDTH-1:0]   wdata,
+    input  logic [(DATA_WIDTH/8)-1:0] we,  // Write enable (byte-level, sized to data width)
+    input  logic [TAG_WIDTH-1:0]    tag = '0,
+    output logic                    ready,
+    output logic                    resp_valid,
+    input  logic                    resp_ready,                // Receiver tells model it can accept response
+    output logic [DATA_WIDTH-1:0]   rdata,
+    output logic [TAG_WIDTH-1:0]    resp_tag
 );
     
     // Memory array
@@ -185,6 +410,7 @@ module memory_model #(
     logic valid_reg;
     logic [(DATA_WIDTH/8)-1:0] we_reg;
     logic [DATA_WIDTH-1:0] wdata_reg;
+    logic [TAG_WIDTH-1:0]  tag_reg;
     
     // Initialize memory to zero
     initial begin
@@ -201,10 +427,12 @@ module memory_model #(
         if (!reset) begin
             resp_valid <= 0;
             rdata <= 0;
+            resp_tag <= 0;
             addr_reg <= 0;
             valid_reg <= 0;
             we_reg <= 0;
             wdata_reg <= 0;
+            tag_reg <= 0;
         end else begin
             // Pipeline stage 1: capture request only when no response is parked
             //   (otherwise we'd overwrite wdata_reg/addr_reg mid-stall)
@@ -213,6 +441,7 @@ module memory_model #(
                 addr_reg <= addr;
                 we_reg <= we;
                 wdata_reg <= wdata;
+                tag_reg <= tag;
             end
             
             // Pipeline stage 2: produce response or hold it
@@ -225,7 +454,9 @@ module memory_model #(
                     end
                 end
                 rdata <= mem[addr_reg];
+                resp_tag <= tag_reg;
                 resp_valid <= 1;
+                if (DATA_WIDTH == 32) $display("IMEM: Fetched addr=%0d data=0x%0h", addr_reg, mem[addr_reg]);
             end else begin
                 resp_valid <= 0;
             end
@@ -274,8 +505,7 @@ endmodule
 //   - Honors resp_ready: holds resp_valid + rdata until the handshake completes
 //
 // Use this in place of memory_model to verify the DUT tolerates a memory that
-// doesn't accept/return immediately. SEED makes each instance's pattern distinct
-// yet reproducible.
+// doesn't accept/return immediately. 
 //////////////////////////////////////////////////////////////////////////////////
 
 module memory_model_stall #(
@@ -283,7 +513,7 @@ module memory_model_stall #(
     parameter int DATA_WIDTH   = 32,
     parameter int MEM_SIZE     = 1024,
     parameter int MAX_LATENCY  = 5,    // Max response latency in cycles (>=1)
-    parameter int SEED         = 1     // Per-instance RNG seed
+    parameter int TAG_WIDTH    = 1
 )(
     input  logic                    clk,
     input  logic                    reset,
@@ -291,24 +521,27 @@ module memory_model_stall #(
     input  logic [ADDR_WIDTH-1:0]   addr,
     input  logic [DATA_WIDTH-1:0]   wdata,
     input  logic [(DATA_WIDTH/8)-1:0] we,
+    input  logic [TAG_WIDTH-1:0]    tag,
     output logic                    ready,
     output logic                    resp_valid,
     input  logic                    resp_ready,
-    output logic [DATA_WIDTH-1:0]   rdata
+    output logic [DATA_WIDTH-1:0]   rdata,
+    output logic [TAG_WIDTH-1:0]    resp_tag
 );
 
     logic [DATA_WIDTH-1:0] mem [MEM_SIZE];
 
     // Request-side backpressure: ready is a registered, randomly-toggled signal
     logic ready_reg;
-    assign ready = ready_reg;
+    logic busy;          // A request is being serviced
+    assign ready = ready_reg && !busy && !(resp_valid && !resp_ready);
 
     // In-flight transaction bookkeeping
     logic [ADDR_WIDTH-1:0]    addr_lat;
     logic [(DATA_WIDTH/8)-1:0] we_lat;
     logic [DATA_WIDTH-1:0]    wdata_lat;
+    logic [TAG_WIDTH-1:0]     tag_lat;
     int                       latency_cnt;   // Counts down to response
-    logic                     busy;          // A request is being serviced
 
     initial begin
         for (int i = 0; i < MEM_SIZE; i++) mem[i] = 0;
@@ -319,9 +552,11 @@ module memory_model_stall #(
             ready_reg   <= 1'b1;
             resp_valid  <= 1'b0;
             rdata       <= '0;
+            resp_tag    <= '0;
             addr_lat    <= '0;
             we_lat      <= '0;
             wdata_lat   <= '0;
+            tag_lat     <= '0;
             latency_cnt <= 0;
             busy        <= 1'b0;
         end else begin
@@ -342,7 +577,8 @@ module memory_model_stall #(
                 addr_lat    <= addr;
                 we_lat      <= we;
                 wdata_lat   <= wdata;
-                latency_cnt <= ($random % MAX_LATENCY) + 1;  // 1..MAX_LATENCY
+                tag_lat     <= tag;
+                latency_cnt <= (($random & 32'h7FFFFFFF) % MAX_LATENCY) + 1;  // 1..MAX_LATENCY
                 busy        <= 1'b1;
             end else if (busy) begin
                 // Count down latency, then perform the access and assert response
@@ -355,6 +591,7 @@ module memory_model_stall #(
                         end
                     end
                     rdata      <= mem[addr_lat];
+                    resp_tag   <= tag_lat;
                     resp_valid <= 1'b1;
                     busy       <= 1'b0;
                 end
@@ -482,7 +719,7 @@ module mc_test_env #(
             );
             memory_model_stall #(
                 .ADDR_WIDTH(CH_ADDR_WIDTH), .DATA_WIDTH(DATA_WIDTH), .MEM_SIZE(MEM_DEPTH),
-                .MAX_LATENCY(5), .SEED(ch + 1)
+                .MAX_LATENCY(5)
             ) stall_mem (
                 .clk(clk), .reset(reset),
                 .valid(mem_valid[ch] & (mem_mode == tb_common_pkg::MEM_STALL)),

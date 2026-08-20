@@ -26,6 +26,7 @@ module fetcher (
     input warp_state_t warp_state,
     input instr_mem_addr_t pc,
     // instr mem
+    input logic mem_ready,
     output logic mem_valid,
     output instr_mem_addr_t mem_addr,
     input logic mem_resp_valid,
@@ -42,7 +43,7 @@ module fetcher (
     // combinational outputs
     always_comb begin
         // defaults
-        mem_valid = 0;
+        mem_valid = 0; // single-cycle pulse
         mem_addr = 0;
         mem_resp_ready = 0;
         done = 0;
@@ -52,7 +53,7 @@ module fetcher (
             mem_valid = 1;
             mem_addr = pc;
         end else if (s == FETCHER_FETCHING) begin
-            mem_valid = 1;
+            mem_valid = 0;
             mem_addr = pc;  // hold address stable during fetch
             mem_resp_ready = 1; // ready to accept response while fetching
             if (mem_resp_valid) begin
@@ -69,7 +70,7 @@ module fetcher (
         end else begin
             case (s)
                 FETCHER_IDLE: begin
-                    if (warp_state == WARP_FETCH) begin
+                    if (warp_state == WARP_FETCH && mem_ready) begin
                         s <= FETCHER_FETCHING;
                     end
                 end 
