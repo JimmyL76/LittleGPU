@@ -1,6 +1,8 @@
 # XSim build output (run_tests.ps1 builds each test in its own dir here)
 .sim/
 xsim.dir/
+.synth/
+
 
 # Vivado / XSim droppings
 *.jou

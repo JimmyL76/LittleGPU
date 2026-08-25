@@ -328,8 +328,12 @@ module arbiter #(
     // advance pointer past granted user, rotate one-hot grant left
     always_comb begin
         next_prio = prio;
-        if (|channel_grants)
-            next_prio = {channel_grants[NUM_USERS-2:0], channel_grants[NUM_USERS-1]};
+        if (|channel_grants) begin
+            if (NUM_USERS > 1)
+                next_prio = {channel_grants[NUM_USERS-2:0], channel_grants[NUM_USERS-1]};
+            else
+                next_prio = channel_grants;
+        end
     end
     
     always_ff @(posedge clk or negedge reset) begin

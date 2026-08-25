@@ -2,6 +2,22 @@
 
 A SIMT (Single Instruction, Multiple Thread) GPU implementation in SystemVerilog, featuring multi-core architecture with warp-based execution, latency hiding, memory coalescing, and a custom C++ assembler toolchain.
 
+**Tech Stack:**
+* **Languages:** SystemVerilog, C++, PowerShell, modified RISC-V RV32I assembly
+* **Tools:** Xilinx Vivado, XSim
+* **Concepts:** SIMT execution, warp scheduling, latency hiding, memory coalescing, multi-channel arbitration, MSHRs
+
+## At a Glance
+
+| | |
+| :--- | :--- |
+| **Design size** | 13 SystemVerilog modules |
+| **Default configuration** | 4 cores x 2 warps/core x 32 threads/warp (**32-wide lanes, 256 resident threads**) |
+| **Memory subsystem** | 8 data + 8 instruction channels, 128-byte line transactions, 32 thread accesses coalesced into 1 |
+| **Execution Model** | SIMT with SIMD pipeline, scoreboard-driven data hazard resolution, and hardware divergence handling |
+| **Verification** | 12 testbenches including full-datapath `tb_gpu` with 4 benchmark kernels |
+| **Toolchain** | Two-pass C++ assembler for custom SIMT ISA |
+
 ## Overview
 
 This project implements a parameterized SIMT GPU architecture in SystemVerilog designed to explore hardware-level parallelism, memory coalescing, and latency hiding in modern GPUs. It supports parallel compute kernel execution across multiple cores using a CUDA-style hierarchy of thread blocks and 32-thread warps. The core executes a modified RISC-V RV32I SIMT instruction set with dedicated vector registers, scalar registers, and custom vector-to-scalar instructions for predication and branch divergence.
@@ -38,6 +54,35 @@ For this project, I created an assembly to binary assembler that translates inst
 This allows for supporting GPU-specific addressing modes, scalar/vector register notations, and comprehensive error handling.
 
 This particular block/warp model is based on CUDA-style directives `.blocks <num_blocks>` and `.warps <num_warps>`.
+
+## Instruction Set Architecture (ISA)
+
+LittleGPU implements a modified **RISC-V RV32I SIMT** instruction set with dedicated Vector, Scalar, Control Flow, and Vector-to-Scalar Predication extensions.
+
+### Opcode Encoding Scheme
+Instructions use standard 32-bit RISC-V encoding. Bit 6 of the 7-bit opcode designates **Vector (`0`)** vs. **Scalar (`1`)**:
+
+| Category | Opcode (Hex) | Opcode (Binary) | Description / Instructions |
+| :--- | :---: | :---: | :--- |
+| **Vector R-Type** | `0x33` | `0010011` | `add`, `sub`, `sll`, `slt`, `sltu`, `xor`, `srl`, `sra`, `or`, `and` (SIMD per-lane) |
+| **Vector I-Arith** | `0x13` | `0010011` | `addi`, `slli`, `slti`, `sltui`, `xori`, `srli`, `srai`, `ori`, `andi` |
+| **Vector Load** | `0x03` | `0000011` | `lw`, `lh`, `lhu`, `lb`, `lbu` (Coalesced 128B memory transactions) |
+| **Vector Store** | `0x23` | `0100011` | `sw`, `sh`, `sb` (Byte write-mask merging) |
+| **Vector Upper Imm**| `0x37` / `0x17` | `0110111` / `0010111` | `lui`, `auipc` |
+| **Scalar R-Type** | `0x73` | `1110011` | `s.add`, `s.sub`, `s.sll`, `s.slt`, `s.sltu`, `s.xor`, `s.srl`, `s.sra`, `s.or`, `s.and` |
+| **Scalar I-Arith** | `0x53` | `1010011` | `s.addi`, `s.slli`, `s.slti`, `s.sltui`, `s.xori`, `s.srli`, `s.srai`, `s.ori`, `s.andi` |
+| **Scalar Load** | `0x43` | `1000011` | `s.lw`, `s.lh`, `s.lhu`, `s.lb`, `s.lbu` |
+| **Scalar Store** | `0x7B` | `1111011` | `s.sw`, `s.sh`, `s.sb` (Re-mapped from `0x23` to prevent branch conflicts) |
+| **Scalar Branch** | `0x63` | `1100011` | `beq`, `bne`, `blt`, `bge`, `bltu`, `bgeu` (Warp-level control flow) |
+| **Scalar Jumps** | `0x6F` / `0x67` | `1101111` / `1100111` | `jal`, `jalr` |
+| **Vector-to-Scalar**| `0x7E` / `0x7D` | `1111110` / `1111101` | `sx.slt`, `sx.slti` (SIMD comparison reduction to scalar mask) |
+
+### Vector-to-Scalar Predication (`sx.*`)
+Branch divergence is handled via execution mask predication rather than per-thread program counters:
+- **`sx.slt rd, rs1, rs2`** (`0x7E`): Evaluates `rs1 < rs2` across each active thread lane in parallel. The boolean outcome of lane $t$ (`alu_out[t][0]`) is written to bit $t$ of scalar register `rd` (typically `s1`, the execution mask).
+- **`sx.slti rd, rs1, imm`** (`0x7D`): Compares each thread lane against immediate `imm`, writing the resulting bitmask to `rd`.
+
+
 
 ## Core/Block Dispatch Logic 
 GPU dispatcher uses bit-masking for efficient matching of pending blocks to free cores, dispatching up to 4 blocks per cycle:
@@ -178,6 +223,35 @@ The design is verified with a comprehensive suite of 12 self-checking SystemVeri
 * **GEMM Matrix Multiplication:** 4x4 Matrix Multiply (`C = A * B`)
 * **Stress & Control Flow:** Multi-block dispatch (10 blocks across 4 cores), multi-warp execution (256 threads), branch/loop counters, and constrained-random stress tests.
 
+## Synthesis & FPGA Resource Scaling
+
+Out-of-context synthesis across 8 configurations on Xilinx Vivado, Artix-7 `-1` speed grade, 100 MHz target (10 ns period). None close timing at 100 MHz, so $F_{\text{max}}$ below is derived from Worst Negative Slack (WNS) as $F_{\text{max}} = \frac{1}{10\text{ns} - \text{WNS}}$ as an estimate.
+
+**Lanes** = `THREADS_PER_WARP`, the physical SIMD width of one core. **Resident threads** = `cores x warps/core x threads/warp`, the peak thread count in flight across the design. Both warps and cores raise resident threads without widening a lane: each core gets its own ALU/LSU/coalescer (`gpu.sv` instantiates one `coalescer` per core), so warps on that core time-multiplex onto already existing hardware, and a second core just repeats that same fixed-width hardware rather than widening it anywhere.
+
+| Config | Cores | Warps/Core | Lanes | Resident Threads | LUTs | FF | WNS | Est. $F_{\text{max}}$ |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`C1W1_T4`** | 1 | 1 | 4 | 4 | 11.9k | 8.7k | -1.699 ns | 85.5 MHz |
+| **`C1W2_T4`** | 1 | 2 | 4 | 8 | 16.4k | 14.7k | -1.640 ns | 85.9 MHz |
+| **`C1W4_T4`** | 1 | 4 | 4 | 16 | 25.2k | 26.4k | -1.640 ns | 85.9 MHz |
+| **`C1W1_T8`** | 1 | 1 | 8 | 8 | 25.8k | 15.7k | -13.147 ns | 43.2 MHz |
+| **`C1W1_T16`**| 1 | 1 | 16 | 16 | 56.7k | 29.7k | -42.528 ns | 19.0 MHz |
+| **`C2W2_T4`** | 2 | 2 | 4 | 16 | 32.7k | 28.3k | -4.781 ns | 67.6 MHz |
+| **`C2W2_T8`** | 2 | 2 | 8 | 32 | 67.3k | 51.2k | -13.147 ns | 43.2 MHz |
+| **`C4W2_T4`** | 4 | 2 | 4 | 32 | 66.1k | 55.7k | -8.068 ns | 55.3 MHz |
+
+All 8 fit on an Artix-7 200T (`xc7a200tfbg484-1`, 134,600 LUT / 269,200 FF). Two also fit the 35T on the Basys 3 (20,800 LUT / 41,600 FF): `C1W1_T4` at 52.1% LUT / 21.0% FF, and `C1W2_T4` at 72.3% LUT / 35.2% FF.
+
+### Takeaways
+
+**Lane width dominates area and timing.** Holding `C=1, W=1` and widening lanes 4 -> 8 -> 16 roughly doubles LUTs at each step and drops $F_{\text{max}}$ from 85.5 to 43.2 to 19.0 MHz. `coalescer.sv` isolates a priority leader, muxes its address, compares it against every other lane's line ID, and inserts matching bytes into a shared write mask across all `T` lanes at once. `regs.sv` reads `registers[t][RS1Addr]` for `rs1`/`rs2` independently per lane, so both blocks add a `T`-wide mux/comparator tree as lanes grow. For `C1W1_T16` this puts 60 logic levels (leader isolation -> address mux -> line-ID comparator -> byte crossbar) on the critical path, 52.5 ns of delay.
+
+**Scaling warps is timing-neutral and scaling cores adds only minor delays.** Holding `C=1, T=4` and going 1 -> 2 -> 4 warps (4 -> 16 resident threads) moves $F_{\text{max}}$ by under 1% (85.5 to 85.9 MHz, run-to-run noise) because warps time-multiplex onto the one fixed-width coalescer/ALU/LSU their core already has. Cores don't share that hardware (`C1W2_T4` -> `C2W2_T4` doubles the coalescer/ALU/LSU count), but they do still share the memory controller's arbiter: `gpu.sv` sets `NUM_DATA_USERS = NUM_CORES * 2`, so each added core deepens that one shared arbitration tree by a couple of logic levels. That shows up as `C1W2_T4`'s critical path going from 15 levels/11.6 ns to `C2W2_T4`'s 17 levels/14.5 ns, which is far cheaper than widening a lane.
+
+**Replicating cores beats widening lanes at equal resident thread count on FPGAs.** `C2W2_T4` and `C1W1_T16` both reach 16 resident threads, but `C2W2_T4` hits 67.6 MHz against `C1W1_T16`'s 19.0 MHz (a 3.5x higher $F_{\text{max}}$) because replication only pays the small per-core arbiter cost above instead of growing the `T`-wide coalescer/regs muxing. The same holds at 32 resident threads: `C4W2_T4` (4 lanes x 4 cores) reaches 55.3 MHz versus `C2W2_T8`'s (8 lanes x 2 cores) 43.2 MHz. The trade-off is that wider SIMD amortizes one fetch/decode instance across more lanes, but pays for it with a wider coalescer/regs mux tree and a larger coalesced line per lane group. Multi-core scaling duplicates fetch/decode/coalescer per core instead of widening them, keeping each core's critical path short with the minor arbiter path cost.
+
+**For area-constrained designs, scaling warps per core is the cheapest way to add resident threads.** `C1W4_T4` holds 16 resident threads in 25.2k LUTs / 26.4k FF, versus 32.7k/28.3k for 2 cores (`C2W2_T4`) and 56.7k/29.7k for 16-wide SIMD (`C1W1_T16`) - fewer LUTs and FFs at the same resident-thread count. Warps duplicate fetch/decode and scheduling logic per warp while sharing one set of ALUs/LSUs per core, which is cheaper than replicating a whole core or widening a lane. The tradeoff is that extra warps buy latency-hiding occupancy for memory-bound kernels, not added per-cycle throughput the way a second core does.
+
 ## Challenges & Lessons Learned
 
 ### Parallel Computations
@@ -186,8 +260,16 @@ Since many different computations are all going on within each clock cycle, I st
 ### Memory Subsystem & Latency Hiding
 Since many memory accesses happen at a time across the entire GPU, all users accessing memory should be as optimized as possible to not bottleneck the rest of the system. Earlier on, I struggled with figuring out pipelined accesses, coalescing 32 thread accesses, handling multiple warps across different pipeline stages, and buffering responses without race conditions. Implementing the 128-byte parallel coalescer and per-core memory scoreboard solved this by letting warps park upon issue and matching returning responses out-of-order with request tags. It showed me firsthand that parallelizing operations isn't just a free solution for speeding up everything, and why memory latency hiding is a huge challenge in GPU architecture.
 
+### Handshake Race Condition
+The original `memory_model` in `tb_common.sv` is always ready and answers in one cycle, which means a request is accepted the moment it is presented. But since real memory stalls, I added a second `memory_model_stall` model with randomized latency and request backpressure to test the memory controller's per-channel logic. In the arbiter's grant branch, the controller latches `next_pending[c] = mem_ready[c]` in the cycle it selects a channel - one cycle *before* it raises `mem_valid[c]`. If memory deasserts `ready` in between, the controller records a request as delivered that the memory never accepted, so no response is received and the channel hangs forever. 
+
+The fix was to detect the real handshake, such that the grant branch now leaves `pending` deasserted, and a separate "presented, not yet taken" branch watches for `valid && ready` while `mem_valid` is actually high. The lesson I learned here is that any testbench should extensively test the backpressure path, since this bug existed the whole time but the passing test suite said nothing about it until memory was allowed to stall. 
+
 ### SIMT Registers & Control Flow
 What makes GPU logic especially complex is handling all the different nuances of modern programs that run on GPUs. These processes have non-linear execution paths, dependent data access patterns, and control flow divergence. In LittleGPU's case, jumps and branches act as scalar operations, despite the fact that certain pieces of data can diverge differently, thus creating the need for special vector-to-scalar instructions (`sx.slt`, `sx.slti`). It was important to implement the logic for these instructions while keeping inputs/outputs to scalar and vector registers consistent and separate.
+
+### Hardware Synthesis & Parameterization
+Moving from simulation to synthesis exposed edge cases sim never hit: a `[-1:0]` part-select in the arbiter's single-user case, and a mask/data-width coupling that blocked warps below 32 threads. Every simulated config had happened to avoid both. Fixed and reflected in the sweep above.
 
 ## Next Steps
 
@@ -196,13 +278,29 @@ Currently working on...
 - [x] Parallel 128-byte memory coalescer
 - [x] Fine-grained warp latency-hiding scheduler and memory scoreboard
 - [x] Automated test suite & top-level GPU benchmark verification (`tb_gpu`)
+- [x] Out-of-context synthesis + sweep over core/warp/thread configurations
+    - [x] Fix arbiter indexing syntax error on single-user
+    - [x] Separate mask width from data width for warps < 32 threads
 
 Next in line...
-- [ ] Extended `tb_gpu` suite (sub-word formatting, strided memory stress, predication)
-- [ ] Integrating C++ assembler toolchain directly into memory preload pipeline
-- [ ] Standalone Software Golden Reference Model for automated differential fuzz testing
+- [ ] Extended `tb_gpu` suite (sub-word formatting, strided memory stress, predication) + `valid`/`ready` handshake assertions
+- [ ] Integrating C++ assembler toolchain directly into memory preload
+- [ ] Standalone Software Golden Reference Model for automated testing
+- [ ] Move vector registers from flip-flops to Block RAM (BRAM) / banked RAM
 - [ ] Hardware branch reconvergence stack for nested control flow divergence
-- [ ] FPGA synthesis, clock frequency analysis, and resource utilization in Vivado
+- [ ] `little-soc`: Connect LittleGPU to [LittleRISC-V](https://github.com/JimmyL76/LittleRISC-V) over AXI4-Lite, CPU-vs-GPU GEMM speedup study
+
 
 ## Acknowledgements
+
+This project started from two open-source references:
+* The overall SIMT model (block/warp/thread hierarchy, one core per block, one PC per warp) follows [tiny-gpu](https://github.com/adam-maj/tiny-gpu).
+* The instruction set is [smol-gpu](https://github.com/Grubre/smol-gpu)'s modified RV32I encoding, including the `sx.*` vector-to-scalar predication instructions and the `.blocks` / `.warps` directive style.
+
+Since the references are single-core or non-coalescing designs, the following made this a multi-core GPU with a more realistic memory hierarchy:
+* The entire memory subsystem: the 128-byte line coalescer, the multi-channel memory controller with rotating-priority arbitration and middle-bit channel interleaving, dense per-channel address compaction, tagged split-transaction request/response routing, and per-user response buffering with end-to-end valid/ready backpressure.
+* The per-core memory scoreboard (MSHR pool) and the warp-parking scheduler that together provide latency hiding - warps yield on memory issue and are woken by tag-matched out-of-order responses.
+* Multi-wave block dispatch with bit-mask free-core detection and dynamic block retirement.
+* The C++ assembler, verification environment, and PowerShell regression runner.
+
 Once again, a huge special thanks to [tiny-gpu](https://github.com/adam-maj/tiny-gpu) and [smol-gpu](https://github.com/Grubre/smol-gpu).

@@ -59,8 +59,8 @@ module core #(
     );
 
     initial begin
-        if (THREADS_PER_WARP != DATA_WIDTH) begin
-            $fatal(1, "Architecture constraint violated: THREADS_PER_WARP (%0d) must equal DATA_WIDTH (%0d)", 
+        if (THREADS_PER_WARP > DATA_WIDTH) begin
+            $fatal(1, "Architecture constraint violated: THREADS_PER_WARP (%0d) must be <= DATA_WIDTH (%0d)", 
                 THREADS_PER_WARP, DATA_WIDTH);
         end
     end
@@ -83,6 +83,7 @@ module core #(
     // for unpacked-array signals that decoder/scalar_regs otherwise also drive
     logic [1:0] Scalar [WARPS_PER_CORE];
     logic [THREADS_PER_WARP-1:0] warp_execution_mask [WARPS_PER_CORE];
+    data_t s_exec_mask_raw [WARPS_PER_CORE];
     
     // execute resource valid check
     logic execute_warp_valid;
@@ -409,13 +410,14 @@ module core #(
                 .IMM(IMM[w])            
             );
         end for (w = 0; w < WARPS_PER_CORE; w++) begin : s_reg_file
+            assign warp_execution_mask[w] = s_exec_mask_raw[w][THREADS_PER_WARP-1:0];
             scalar_regs #(
                 .SCALAR_REGS_PER_WARP(32)
             ) scalar_regs_inst(
                 .clk(clk), .reset(reset),
                 .warp_state(warp_state[w]),
                 .warp_enable((warp_state[w] == WARP_DECODE) || (warp_state[w] == WARP_WRITEBACK)),
-                .execution_mask(warp_execution_mask[w]), 
+                .execution_mask(s_exec_mask_raw[w]), 
                 // data + control signals
                 .Scalar(Scalar[w]),
                 .LdReg(LdReg[w]),
@@ -551,10 +553,10 @@ module core #(
     utility #(WARPS_PER_CORE) mem_warp_selector(first_memory_warp_onehot, next_memory_warp);
     
     // for vector to scalar - always calculate, let scalar_regs gate the write
-    // NOTE: this operation requires THREADS_PER_WARP == DATA_WIDTH (execution mask alignment)
     always_comb begin
+        v_to_s_value = '0;
         for (int t = 0; t < THREADS_PER_WARP; t++) 
-            v_to_s_value[t] = alu_out[t];
+            v_to_s_value[t] = alu_out[t][0];
     end
     
     always_ff @(posedge clk or negedge reset) begin
@@ -616,9 +618,12 @@ module core #(
                         warp_state[execute_warp] <= WARP_EXECUTE; 
                     end
                     WARP_EXECUTE: begin
+                        `ifndef SYNTHESIS
+                        // guard since decode_instr is declared under ifndef SYNTHESIS in common_pkg
                         if (fetched_instr[execute_warp] != 0) begin // DEBUG prints
                             $display("[Core %0d|Block %0d|Warp %0d] Executing PC x%0H: %s (Mask: %0b)", core_id, core_block_id, execute_warp, pc[execute_warp], common_pkg::decode_instr(fetched_instr[execute_warp]), warp_execution_mask[execute_warp]);
                         end
+                        `endif
                         if (IsBR_J[execute_warp]) begin // branch/jump
                             // DEBUG prints
                             if (IsBR_J[execute_warp] == 2'b10) begin // JAL/JALR
