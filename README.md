@@ -12,7 +12,7 @@ A SIMT (Single Instruction, Multiple Thread) GPU implementation in SystemVerilog
 | | |
 | :--- | :--- |
 | **Design size** | 13 SystemVerilog modules |
-| **Default configuration** | 4 cores x 2 warps/core x 32 threads/warp (**32-wide lanes, 256 resident threads**) |
+| **Default configuration** | 4 cores x 2 warps/core x 32 threads/warp (8 warps, 32-wide lanes per core, 128 execution units total, 256 resident threads) |
 | **Memory subsystem** | 8 data + 8 instruction channels, 128-byte line transactions, 32 thread accesses coalesced into 1 |
 | **Execution Model** | SIMT with SIMD pipeline, scoreboard-driven data hazard resolution, and hardware divergence handling |
 | **Verification** | 12 testbenches including full-datapath `tb_gpu` with 4 benchmark kernels |
@@ -225,7 +225,7 @@ The design is verified with a comprehensive suite of 12 self-checking SystemVeri
 
 ## Synthesis & FPGA Resource Scaling
 
-Out-of-context synthesis across 8 configurations on Xilinx Vivado, Artix-7 `-1` speed grade, 100 MHz target (10 ns period). None close timing at 100 MHz, so $F_{\text{max}}$ below is derived from Worst Negative Slack (WNS) as $F_{\text{max}} = \frac{1}{10\text{ns} - \text{WNS}}$ as an estimate.
+Out-of-context synthesis across a sweep of core/warp/SIMD-width configurations (9 so far) on Xilinx Vivado, Artix-7 `-1` speed grade, 100 MHz target (10 ns period). None close timing at 100 MHz, so $F_{\text{max}}$ below is derived from Worst Negative Slack (WNS) as $F_{\text{max}} = \frac{1}{10\text{ns} - \text{WNS}}$ as an estimate.
 
 **Lanes** = `THREADS_PER_WARP`, the physical SIMD width of one core. **Resident threads** = `cores x warps/core x threads/warp`, the peak thread count in flight across the design. Both warps and cores raise resident threads without widening a lane: each core gets its own ALU/LSU/coalescer (`gpu.sv` instantiates one `coalescer` per core), so warps on that core time-multiplex onto already existing hardware, and a second core just repeats that same fixed-width hardware rather than widening it anywhere.
 
@@ -239,12 +239,14 @@ Out-of-context synthesis across 8 configurations on Xilinx Vivado, Artix-7 `-1` 
 | **`C2W2_T4`** | 2 | 2 | 4 | 16 | 32.7k | 28.3k | -4.781 ns | 67.6 MHz |
 | **`C2W2_T8`** | 2 | 2 | 8 | 32 | 67.3k | 51.2k | -13.147 ns | 43.2 MHz |
 | **`C4W2_T4`** | 4 | 2 | 4 | 32 | 66.1k | 55.7k | -8.068 ns | 55.3 MHz |
+| **`C4W2_T32`**| 4 | 2 | 32 | 256 | 833.1k | 381.2k | -110.740 ns | 8.3 MHz |
 
-All 8 fit on an Artix-7 200T (`xc7a200tfbg484-1`, 134,600 LUT / 269,200 FF). Two also fit the 35T on the Basys 3 (20,800 LUT / 41,600 FF): `C1W1_T4` at 52.1% LUT / 21.0% FF, and `C1W2_T4` at 72.3% LUT / 35.2% FF.
+The first 8 configurations physically fit on an Artix-7 200T (`xc7a200tfbg484-1`, 134,600 LUT / 269,200 FF), with `C1W1_T4` (52.1% LUT / 21.0% FF) and `C1W2_T4` (72.3% LUT / 35.2% FF) fitting the 35T on the Basys 3. The full 128-lane / 256-thread flagship design (`C4W2_T32`) scales to 833.1k LUTs / 381.2k FFs, only fitting on high-end datacenter FPGAs (e.g. AMD Virtex UltraScale+ `VU9P`).
 
 ### Takeaways
 
-**Lane width dominates area and timing.** Holding `C=1, W=1` and widening lanes 4 -> 8 -> 16 roughly doubles LUTs at each step and drops $F_{\text{max}}$ from 85.5 to 43.2 to 19.0 MHz. `coalescer.sv` isolates a priority leader, muxes its address, compares it against every other lane's line ID, and inserts matching bytes into a shared write mask across all `T` lanes at once. `regs.sv` reads `registers[t][RS1Addr]` for `rs1`/`rs2` independently per lane, so both blocks add a `T`-wide mux/comparator tree as lanes grow. For `C1W1_T16` this puts 60 logic levels (leader isolation -> address mux -> line-ID comparator -> byte crossbar) on the critical path, 52.5 ns of delay.
+**Lane width dominates area and timing.** Holding `C=1, W=1` and widening lanes 4 -> 8 -> 16 roughly doubles LUTs at each step and drops $F_{\text{max}}$ from 85.5 to 43.2 to 19.0 MHz. `coalescer.sv` isolates a priority leader, muxes its address, compares it against every other lane's line ID, and inserts matching bytes into a shared write mask across all `T` lanes at once. `regs.sv` reads `registers[t][RS1Addr]` for `rs1`/`rs2` independently per lane, so both blocks add a `T`-wide mux/comparator tree as lanes grow. For `C1W1_T16` this puts 60 logic levels on the critical path (52.5 ns of delay), expanding to 164 logic levels (120.8 ns of delay, ~91.8k LUTs per coalescer) in the 32-lane `C4W2_T32` build.
+
 
 **Scaling warps is timing-neutral and scaling cores adds only minor delays.** Holding `C=1, T=4` and going 1 -> 2 -> 4 warps (4 -> 16 resident threads) moves $F_{\text{max}}$ by under 1% (85.5 to 85.9 MHz, run-to-run noise) because warps time-multiplex onto the one fixed-width coalescer/ALU/LSU their core already has. Cores don't share that hardware (`C1W2_T4` -> `C2W2_T4` doubles the coalescer/ALU/LSU count), but they do still share the memory controller's arbiter: `gpu.sv` sets `NUM_DATA_USERS = NUM_CORES * 2`, so each added core deepens that one shared arbitration tree by a couple of logic levels. That shows up as `C1W2_T4`'s critical path going from 15 levels/11.6 ns to `C2W2_T4`'s 17 levels/14.5 ns, which is far cheaper than widening a lane.
 
