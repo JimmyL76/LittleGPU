@@ -180,6 +180,27 @@ There are also similarly 32 scalar registers:
 
 Notice that the example code used the special vector-to-scalar instruction ```sx.slti``` to turn off calculations for a specific thread. This masking is one way to solve the branching issue inside SIMT architectures and ensure the threads properly converge back to the same instruction.
 
+### Register/ID Semantics
+
+`x1`-`x3` and `s1` are populated entirely by hardware, not software - the program never writes them directly, only reads (`x1`-`x3`) or predicates with (`s1`).
+
+|**Register**|**Meaning**|**Computed by**|**Set by user?**|
+|-------------|-----------|----------------|-----------------|
+|`x1`|**local** thread id within the warp, `0..THREADS_PER_WARP-1` per lane|`regs.sv`: `thread_ids[t] = warp_id * THREADS_PER_WARP + t`|No, hardware-driven, read-only|
+|`x2`|which block this core is currently running|`core_block_id`, assigned by `dispatcher.sv` when the block is dispatched to a free core|No, hardware-driven, read-only|
+|`x3`|`num_warps_per_block * THREADS_PER_WARP`, total threads in the block|derived from `kernel_config.num_warps_per_block`, itself set by the `.warps` directive at assembly time|Indirectly, via `.warps N` in the kernel source - not a register write|
+|`s1`|which of the 32 lanes are currently active for vector ops|`scalar_regs.sv`, resets to all-1s (`registers[EXEC_MASK_REG] <= '1`)|Yes, manually, via `sx.slt`/`sx.slti` (or a plain scalar write: `s.addi s1, x0, -1`)|
+
+Note on `x1`: despite the name "thread id," `thread_ids[t]` in `regs.sv` is a warp-relative-to-core id (`warp_id * THREADS_PER_WARP + t`), not a single global index across the whole block/kernel. A program that wants a fully global thread id (such as to index into a large array shared across all blocks) computes it itself from `x1`, `x2`, and `x3` - `global_id = block_id * block_size + local_thread_id`, the same pattern CUDA's `blockIdx.x * blockDim.x + threadIdx.x` follows. `.blocks`/`.warps` are chosen by the kernel to match the problem size up front (e.g. N=64 elements -> 2 blocks x 1 warp x 32 threads), so the hardware has no notion of the problem size, it only dispatches whatever block/warp count the kernel declares.
+
+All of `x1`-`x3` matter directly for coalesced vector load/store: a typical vector load computes `addr = base + x1 * elem_size` (or some function of `x1`/`x2`/`x3`), so consecutive lanes naturally produce consecutive addresses - exactly the pattern the coalescer (`coalescer.sv`) and channel-interleaved address decode (`mem_controller.sv`) are built to exploit (see "Memory Coalescing").
+
+### Execution Mask (`s1`) Lifecycle
+
+- **Default:** all lanes active - `scalar_regs.sv` resets `s1` to all-1s (`'1`, all `DATA_WIDTH` bits set), so vector instructions execute on every lane until a program narrows it.
+- **Narrowed manually:** a kernel that wants divergent control flow must explicitly compute and write a new mask via `sx.slt` or `sx.slti` targeting `s1`, since masking is a software convention built on top of a normal scalar register, not a separate hardware mechanism.
+- **Reconvergence is manual:** there is no hardware reconvergence stack in this design (see "Next Steps"). A kernel that narrows the mask for an `if` block must explicitly widen it back once that block is done (re-running `sx.slti` with an always-true condition), or the narrowed mask silently persists and masks off later instructions.
+
 ## Testing & Verification
 
 The design is verified with a comprehensive suite of 12 self-checking SystemVerilog testbenches in Vivado XSim. A PowerShell test runner (`run_sim.ps1`) automates simulation, supporting sequential runs, parallel multi-process execution, or running individual testbenches.
@@ -269,6 +290,8 @@ The fix was to detect the real handshake, such that the grant branch now leaves 
 
 ### SIMT Registers & Control Flow
 What makes GPU logic especially complex is handling all the different nuances of modern programs that run on GPUs. These processes have non-linear execution paths, dependent data access patterns, and control flow divergence. In LittleGPU's case, jumps and branches act as scalar operations, despite the fact that certain pieces of data can diverge differently, thus creating the need for special vector-to-scalar instructions (`sx.slt`, `sx.slti`). It was important to implement the logic for these instructions while keeping inputs/outputs to scalar and vector registers consistent and separate.
+
+While documenting the execution mask's default value, I found `scalar_regs.sv`'s reset had intended `s1` to reset to all lanes active, but the actual assignment (`registers[EXEC_MASK_REG] <= 1`) only set bit 0, activating just thread 0. Every benchmark happened to mask this, since each one's first instruction manually reinitializes `s1` to all-1s anyway before doing any vector work, so the test suite never exercised the hardware default directly. This shows that it's important to know what's in your spec (or the usage the user will see/do) vs what behavior you actually mimic in a testbench, since any difference could mean testbenches evaluate the wrong parts of the design.
 
 ### Hardware Synthesis & Parameterization
 Moving from simulation to synthesis exposed edge cases sim never hit: a `[-1:0]` part-select in the arbiter's single-user case, and a mask/data-width coupling that blocked warps below 32 threads. Every simulated config had happened to avoid both. Fixed and reflected in the sweep above.

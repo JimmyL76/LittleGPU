@@ -65,7 +65,7 @@ module scalar_regs #(
         if (!reset) begin
             for (int r = 0; r < SCALAR_REGS_PER_WARP; r++)
                 registers[r] <= 0; // init all with 0s
-            registers[EXEC_MASK_REG] <= 1; // except execution mask which should be all 1s
+            registers[EXEC_MASK_REG] <= '1; // except execution mask which should be all 1s (all DATA_WIDTH bits set)
         end else if (warp_enable) begin
             // register read stage
             if (warp_state == WARP_DECODE && (Scalar == 1)) begin

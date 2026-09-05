@@ -133,8 +133,8 @@ module tb_scalar_regs;
         @(posedge clk); #1;
         
         compare_data("Reset_S0_Zero", rs1, 32'h0000_0000);
-        compare_data("Reset_S1_InitOne", rs2, 32'h0000_0001);
-        compare_data("Reset_ExecMask_InitOne", execution_mask, 32'h0000_0001);
+        compare_data("Reset_S1_InitAllOnes", rs2, 32'hFFFF_FFFF);
+        compare_data("Reset_ExecMask_InitAllOnes", execution_mask, 32'hFFFF_FFFF);
         
         // Verify other registers are zero
         RS1Addr = 5;
